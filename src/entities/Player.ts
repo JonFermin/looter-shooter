@@ -12,6 +12,7 @@ import { Mesh } from "@babylonjs/core/Meshes/mesh.js";
 import { FreeCamera } from "@babylonjs/core/Cameras/freeCamera.js";
 import type { AnimationGroup } from "@babylonjs/core/Animations/animationGroup.js";
 import type { AssetContainer } from "@babylonjs/core/assetContainer.js";
+import { Observable } from "@babylonjs/core/Misc/observable.js";
 import type { Observer } from "@babylonjs/core/Misc/observable.js";
 import type { Nullable } from "@babylonjs/core/types.js";
 
@@ -133,6 +134,11 @@ export class Player {
   // summary and any "kills until next wave" HUD work.
   private _currency = 0;
   private _totalKills = 0;
+
+  // Fires once per HP > 0 → 0 transition. Subscribers (Arena's death-screen
+  // overlay) get notified before respawn() teleports the player back, so
+  // they can capture the dying state for the summary screen.
+  readonly onDied = new Observable<void>();
 
   // Keep references so dispose() can detach/clean up.
   private beforeRenderObserver: Nullable<Observer<Scene>> = null;
@@ -377,8 +383,12 @@ export class Player {
     this._shield -= shieldHit;
     const hpHit = amount - shieldHit;
     if (hpHit > 0) {
+      const prevHp = this._hp;
       this._hp = Math.max(0, this._hp - hpHit);
-      if (this._hp === 0) {
+      if (this._hp === 0 && prevHp > 0) {
+        // Notify before respawn so subscribers see the dying state and can
+        // capture wave/kill counters before the auto-respawn restores HP.
+        this.onDied.notifyObservers();
         this.respawn();
       }
     }
@@ -469,6 +479,7 @@ export class Player {
       g.stop();
     }
     this.allAnimGroups = [];
+    this.onDied.clear();
     this.rightHandTransform?.dispose();
     this.camera?.dispose();
     this.root?.dispose();

@@ -32,6 +32,7 @@ import {
   spawnLoot,
   nearestPickup,
   dispose as disposeLoot,
+  getActiveDrops,
 } from "../systems/LootSystem.js";
 import { fire as combatFire, notifyHit } from "../systems/Combat.js";
 import {
@@ -41,6 +42,8 @@ import {
 import { Hud } from "../ui/Hud.js";
 import { DamageNumbers } from "../ui/DamageNumbers.js";
 import { Inventory } from "../ui/Inventory.js";
+import { StartScreen } from "../ui/StartScreen.js";
+import { DeathScreen } from "../ui/DeathScreen.js";
 
 import {
   Archetype,
@@ -759,8 +762,45 @@ export async function createArenaScene(
   hud.setWaveState(spawner.state);
   spawner.onStateChange.add((s) => hud.setWaveState(s));
 
-  // Kick off wave 1.
-  spawner.start();
+  // Gate wave 1 behind the StartScreen — no enemies spawn until the
+  // player presses any key. The screen disposes itself on first keydown.
+  const startScreen = new StartScreen(scene, () => {
+    spawner.start();
+  });
+
+  // Death-screen state. The Player auto-respawns to full HP on takeDamage→0;
+  // we use the onDied notification to overlay a YOU DIED screen with the
+  // wave/kill summary, blocking gameplay perception until R restarts.
+  let deathScreen: DeathScreen | null = null;
+  let deathScreenActive = false;
+
+  function restartGame(): void {
+    for (const enemy of enemies) enemy.dispose();
+    enemies.length = 0;
+    enemyByMesh.clear();
+    for (const drop of getActiveDrops()) disposeLoot(drop);
+    spawner.reset();
+    // Player auto-respawned already on death; teleporting + idempotent
+    // respawn() guarantees a clean post-restart state regardless.
+    player.respawn();
+    player.rootMesh.position.copyFrom(spawnPoint);
+    spawner.start();
+  }
+
+  player.onDied.add(() => {
+    if (deathScreenActive) return;
+    deathScreenActive = true;
+    const wavesSurvived = Math.max(0, spawner.state.waveNumber - 1);
+    deathScreen = new DeathScreen(scene, {
+      wavesSurvived,
+      totalKills: player.totalKills,
+      onRestart: () => {
+        restartGame();
+        deathScreen = null;
+        deathScreenActive = false;
+      },
+    });
+  });
 
   // ---- Inventory UI ----
   // Equip + discard handlers are wired below; the inventory just bridges
@@ -958,6 +998,8 @@ export async function createArenaScene(
     scene.onBeforeRenderObservable.remove(beforeRender);
     unsubscribeFire();
     window.removeEventListener("keydown", tabKeyListener);
+    startScreen.dispose();
+    deathScreen?.dispose();
     inventory.dispose();
     spawner.dispose();
     hud.dispose();

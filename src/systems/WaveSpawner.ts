@@ -176,6 +176,21 @@ export class WaveSpawner {
     }
   }
 
+  /**
+   * Reset to a fresh idle state so the next start() begins wave 1. Used by
+   * the death-screen restart flow — clears wave/enemy counters and fires
+   * onStateChange so the HUD's wave indicator clears.
+   */
+  reset(): void {
+    if (this.disposed) return;
+    this.waveNumber = 0;
+    this.status = "idle";
+    this.enemiesAlive = 0;
+    this.enemiesTotal = 0;
+    this.breatherTimeRemaining = 0;
+    this.notifyStateChange();
+  }
+
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
