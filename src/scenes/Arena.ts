@@ -34,6 +34,7 @@ import {
   dispose as disposeLoot,
 } from "../systems/LootSystem.js";
 import { fire as combatFire } from "../systems/Combat.js";
+import { Hud } from "../ui/Hud.js";
 
 import {
   Archetype,
@@ -632,8 +633,15 @@ export async function createArenaScene(
     }
   });
 
-  // ---- E key picks up nearest drop ----
+  // ---- HUD overlay ----
+  // The HUD pulls live values from the player + active weapon every frame.
+  // We thread the weapon through a closure so future weapon swaps (Phase 7
+  // pickup-to-equip) just need to point this getter at the new instance.
+  const hud = new Hud(scene, player, () => weapon);
+
+  // ---- E key picks up nearest drop, R key reloads ----
   let eWasDown = false;
+  let rWasDown = false;
 
   // ---- per-frame tick ----
   const beforeRender = scene.onBeforeRenderObservable.add(() => {
@@ -664,21 +672,40 @@ export async function createArenaScene(
       }
     }
     eWasDown = eNow;
+
+    // R keypress edge — kicks off a reload on the equipped weapon.
+    const rNow = input.isDown("r");
+    if (rNow && !rWasDown) {
+      weapon.reload();
+    }
+    rWasDown = rNow;
   });
 
   // ---- teardown ----
   scene.onDisposeObservable.addOnce(() => {
     scene.onBeforeRenderObservable.remove(beforeRender);
     unsubscribeFire();
+    hud.dispose();
     for (const e of enemies) e.dispose();
     weapon.dispose();
     player.dispose();
     input.dispose();
   });
 
-  // Debug global so the browser console can poke at scene state.
+  // Debug globals so the browser console can poke at scene state. Mirrors
+  // the WeaponDemo dev hooks so manual testing (HUD verification, damage
+  // routing) doesn't have to fight pointer-lock.
   if (import.meta.env.DEV) {
-    (window as unknown as { __scene?: Scene }).__scene = scene;
+    const w = window as unknown as {
+      __scene?: Scene;
+      __player?: Player;
+      __weapon?: Weapon;
+      __hud?: Hud;
+    };
+    w.__scene = scene;
+    w.__player = player;
+    w.__weapon = weapon;
+    w.__hud = hud;
   }
 
   return scene;
