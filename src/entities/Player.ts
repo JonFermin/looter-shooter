@@ -1,11 +1,15 @@
+import "@babylonjs/core/Culling/ray.js";
+
 import type { Scene } from "@babylonjs/core/scene.js";
 import type { Bone } from "@babylonjs/core/Bones/bone.js";
 import { Vector3 } from "@babylonjs/core/Maths/math.vector.js";
 import { Quaternion } from "@babylonjs/core/Maths/math.vector.js";
+import { Ray } from "@babylonjs/core/Culling/ray.js";
 import type { BoundingBox } from "@babylonjs/core/Culling/boundingBox.js";
+import type { AbstractMesh } from "@babylonjs/core/Meshes/abstractMesh.js";
 import { TransformNode } from "@babylonjs/core/Meshes/transformNode.js";
 import { Mesh } from "@babylonjs/core/Meshes/mesh.js";
-import { FollowCamera } from "@babylonjs/core/Cameras/followCamera.js";
+import { FreeCamera } from "@babylonjs/core/Cameras/freeCamera.js";
 import type { AnimationGroup } from "@babylonjs/core/Animations/animationGroup.js";
 import type { AssetContainer } from "@babylonjs/core/assetContainer.js";
 import type { Observer } from "@babylonjs/core/Misc/observable.js";
@@ -23,30 +27,24 @@ const JUMP_VELOCITY = 9; // initial vy on jump
 const GRAVITY = -25; // units / sec^2
 const GROUND_Y = 0;
 
-// Sensitivity in degrees of camera yaw per pixel of mouse-X movement, and
-// degrees of camera pitch per pixel of mouse-Y. Tuned for a 1080p canvas.
-const MOUSE_YAW_DEG_PER_PIXEL = 0.2;
-const MOUSE_PITCH_PER_PIXEL = 0.005;
+// Sensitivity in radians per pixel. Slightly lower than the old FollowCamera
+// tuning because modern shoulder cams need precision around the reticle.
+const MOUSE_YAW_RAD_PER_PIXEL = 0.0035;
+const MOUSE_PITCH_RAD_PER_PIXEL = 0.0028;
 
-// FollowCamera tuning. radius = how far behind the player; heightOffset =
-// vertical offset relative to the locked target (positive = camera above,
-// negative = camera below); rotationOffset is in *degrees*.
-//
-// Babylon's FollowCamera always points AT the lockedTarget, so the way to
-// "look up" is to lower the camera (below the player), so the line-of-sight
-// to the target tilts upward and the sky appears beyond the player. The
-// way to "look down" is to raise the camera. So the height range spans both
-// sides of the player.
-const CAMERA_RADIUS = 6;
-const CAMERA_HEIGHT_MIN = -1.5; // looking up — camera below player, sees sky beyond
-const CAMERA_HEIGHT_MAX = 6; // looking down — camera high, sees ground beyond
-const CAMERA_HEIGHT_DEFAULT = 2.5;
-const CAMERA_ROT_ACCEL = 0.05;
-const CAMERA_HEIGHT_ACCEL = 0.05;
-const CAMERA_RADIUS_ACCEL = 0.05;
-const CAMERA_MAX_ROT_SPEED = 1000;
-const CAMERA_MAX_HEIGHT_SPEED = 50;
-const CAMERA_MAX_RADIUS_SPEED = 50;
+// Over-the-shoulder third-person camera. Position stays mostly locked behind
+// the player while pitch changes the aim direction, not the boom height, so
+// mouse look feels like a shooter rather than an orbit camera.
+const CAMERA_DISTANCE = 4.75;
+const CAMERA_COLLISION_MIN_DISTANCE = 0.35;
+const CAMERA_COLLISION_BUFFER = 0.15;
+const CAMERA_FOV = 1.05;
+const CAMERA_LOOK_AHEAD = 30;
+const CAMERA_AIM_HEIGHT = 1.5;
+const CAMERA_SHOULDER_OFFSET_X = 0.8;
+const CAMERA_SHOULDER_OFFSET_Y = 0.35;
+const CAMERA_PITCH_MIN = -Math.PI / 4;
+const CAMERA_PITCH_MAX = Math.PI / 3;
 
 // How fast (in 0..1 weight per second) the active animation group fades in
 // while the others fade out, for crossfading. 6 -> ~166 ms blend.
@@ -66,10 +64,9 @@ export class Player {
 
   // Root anchor for the loaded character — receives translation + yaw
   // rotation. Implemented as a bare Mesh (no geometry, invisible) so that
-  // FollowCamera.lockedTarget can accept it (lockedTarget requires an
-  // AbstractMesh, not a TransformNode).
+  // gameplay systems can treat it as a concrete mesh for picking/filtering.
   private root!: Mesh;
-  private camera!: FollowCamera;
+  private camera!: FreeCamera;
   private container?: AssetContainer;
   private rightHandTransform!: TransformNode;
 
@@ -83,14 +80,11 @@ export class Player {
 
   private currentState: AnimState = "idle";
 
-  // Yaw of the player root in radians. Driven by mouse-X while pointer is
-  // locked. Camera trails behind by mirroring this onto rotationOffset.
+  // View yaw in radians. The player body tracks this directly so movement is
+  // camera-relative and strafing keeps the crosshair aligned with the weapon.
   private yaw = 0;
-  // Camera pitch in radians (vertical look). Translated into heightOffset
-  // by mapping pitch range -> height range so FollowCamera handles the rest.
-  // 0 = horizontal forward (default neutral); positive = looking up at sky;
-  // negative = looking down at ground. Clamped in handleMouseLook.
-  private pitch = 0;
+  // Vertical look angle in radians. 0 = level, positive = aim up.
+  private pitch = -0.12;
 
   private vy = 0;
   private grounded = true;
@@ -119,6 +113,19 @@ export class Player {
   // Keep references so dispose() can detach/clean up.
   private beforeRenderObserver: Nullable<Observer<Scene>> = null;
   private clickListener?: () => void;
+  private readonly flatForward = new Vector3(0, 0, 1);
+  private readonly lookForward = new Vector3(0, 0, 1);
+  private readonly right = new Vector3(1, 0, 0);
+  private readonly aimOrigin = new Vector3();
+  private readonly desiredCameraPosition = new Vector3();
+  private readonly resolvedCameraPosition = new Vector3();
+  private readonly cameraTarget = new Vector3();
+  private readonly cameraRayDirection = new Vector3(0, 0, -1);
+  private readonly cameraCollisionRay = new Ray(
+    Vector3.Zero(),
+    new Vector3(0, 0, -1),
+    CAMERA_DISTANCE,
+  );
 
   constructor(scene: Scene, canvas: HTMLCanvasElement, input: Input) {
     this.scene = scene;
@@ -128,8 +135,8 @@ export class Player {
 
   /**
    * Async constructor helper. Loads the character glTF, instantiates it
-   * into the scene, wires up the FollowCamera, and starts the per-frame
-   * update loop. Call once after `new Player(...)`.
+   * into the scene, wires up the over-the-shoulder camera, and starts the
+   * per-frame update loop. Call once after `new Player(...)`.
    */
   async init(): Promise<void> {
     this.container = await loadGLB(this.scene, PLAYER_MESH_PATH);
@@ -150,14 +157,13 @@ export class Player {
 
     // Wrap in a clean Mesh anchor so we own translation/rotation without
     // fighting whatever transforms the export baked in. Bare Mesh has no
-    // geometry, doesn't render, but satisfies FollowCamera.lockedTarget's
-    // AbstractMesh requirement. Quaternius Lis exports facing +Z natively,
-    // matching our convention (camera at -Z = behind, W = +Z forward), so
-    // no extra rotation is applied here. (Earlier code rotated 180° on the
-    // mistaken assumption the model faced -Z, which put the camera at the
-    // model's face — see the camera bug reported during Phase 6.)
+    // geometry, doesn't render, and gives downstream systems a concrete mesh
+    // to filter against. Quaternius Lis exports facing +Z natively, matching
+    // our convention (camera at -Z = behind, W = +Z forward), so no extra
+    // rotation is applied here.
     const wrapper = new Mesh("playerRoot", this.scene);
     firstRoot.parent = wrapper;
+    wrapper.rotationQuaternion = Quaternion.Identity();
     this.root = wrapper;
 
     this.collectAnimationGroups(instance.animationGroups);
@@ -371,44 +377,21 @@ export class Player {
   }
 
   private setupCamera(): void {
-    // FollowCamera orbits a target every frame, smoothly catching up. We
-    // rotate around the player by setting `rotationOffset` (degrees).
-    const startTarget = new Vector3(0, 1.5, 0);
-    const camera = new FollowCamera(
-      "playerFollowCam",
-      startTarget.add(new Vector3(0, CAMERA_HEIGHT_DEFAULT, -CAMERA_RADIUS)),
+    const camera = new FreeCamera(
+      "playerShoulderCam",
+      new Vector3(0, CAMERA_AIM_HEIGHT + CAMERA_SHOULDER_OFFSET_Y, -CAMERA_DISTANCE),
       this.scene,
     );
-    camera.radius = CAMERA_RADIUS;
-    camera.heightOffset = CAMERA_HEIGHT_DEFAULT;
-    camera.rotationOffset = 180; // start behind the player
-    camera.cameraAcceleration = CAMERA_ROT_ACCEL;
-    camera.maxCameraSpeed = CAMERA_MAX_ROT_SPEED;
-    // Babylon FollowCamera also exposes the lerp params on inherited
-    // TargetCamera under different names; the public ones above are all we
-    // need. Quaternions on the target work fine for follow.
-    camera.lockedTarget = this.root;
-    // Constrain pitch via the constants above.
+    camera.fov = CAMERA_FOV;
     camera.minZ = 0.1;
 
-    // We don't call attachControl — we drive the camera ourselves via the
-    // mouse delta from Input. Babylon's default FollowCamera input would
-    // fight us otherwise.
+    // We don't call attachControl — the Player owns mouse look so camera aim,
+    // movement, and combat reticle all stay in sync.
     this.scene.activeCamera = camera;
     this.camera = camera;
-
-    // Apply initial pitch.
-    this.applyPitchToCamera();
-
-    // Cast to silence the unused TS hint for CAMERA_*_ACCEL constants on
-    // FollowCamera without `cameraHeightAcceleration`/`maxHeightSpeed`
-    // (those exist on ArcFollowCamera, not FollowCamera). We keep the
-    // constants here for documentation; if Babylon adds height-acc later we
-    // can wire them up.
-    void CAMERA_HEIGHT_ACCEL;
-    void CAMERA_RADIUS_ACCEL;
-    void CAMERA_MAX_HEIGHT_SPEED;
-    void CAMERA_MAX_RADIUS_SPEED;
+    this.syncRootRotation();
+    this.updateCameraBasis();
+    this.updateCamera();
   }
 
   // The Lis rig has no explicit "Hand.R" bone — the fingers parent directly
@@ -466,8 +449,11 @@ export class Player {
     if (dt <= 0) return;
 
     this.handleMouseLook();
+    this.updateCameraBasis();
+    this.syncRootRotation();
     const moved = this.handleMovement(dt);
     this.handleJumpAndGravity(dt);
+    this.updateCamera();
     this.updateAnimationState(moved);
     this.crossfadeAnimations(dt);
     this.updateShield(dt);
@@ -494,40 +480,13 @@ export class Player {
   private handleMouseLook(): void {
     const { dx, dy } = this.input.getMouseDelta();
     if (dx === 0 && dy === 0) return;
-    // Yaw: spin the player root, which the camera follows via lockedTarget.
-    // Negative dx so a rightward mouse move spins the player clockwise (and
-    // therefore the camera orbits to look from the right).
-    this.yaw -= dx * MOUSE_YAW_DEG_PER_PIXEL * (Math.PI / 180);
-    // Apply yaw as a quaternion to avoid Euler order surprises.
-    this.root.rotationQuaternion = Quaternion.RotationYawPitchRoll(
-      this.yaw,
-      0,
-      0,
-    );
+    // Negative dx so a rightward mouse move turns the view clockwise.
+    this.yaw -= dx * MOUSE_YAW_RAD_PER_PIXEL;
 
-    // Pitch: clamped vertical look. Negative dy because moving the mouse up
-    // should look up.
-    this.pitch -= dy * MOUSE_PITCH_PER_PIXEL;
-    // Clamp to roughly -45..+60 degrees of pitch.
-    const minPitch = -Math.PI / 4;
-    const maxPitch = Math.PI / 3;
-    if (this.pitch < minPitch) this.pitch = minPitch;
-    if (this.pitch > maxPitch) this.pitch = maxPitch;
-
-    this.applyPitchToCamera();
-  }
-
-  private applyPitchToCamera(): void {
-    // Map pitch [-PI/4 .. PI/3] -> heightOffset [MAX .. MIN] (inverted).
-    // Higher pitch (looking up) LOWERS the camera so its line-of-sight
-    // to the target tilts upward and the sky becomes visible beyond the
-    // player. Lower pitch raises the camera so we look down past the
-    // player at the ground. The previous mapping was inverted and capped
-    // out above the player, making "look up" feel like a stuck "look down".
-    const t =
-      (this.pitch + Math.PI / 4) / (Math.PI / 3 + Math.PI / 4); // 0..1
-    this.camera.heightOffset =
-      CAMERA_HEIGHT_MAX - t * (CAMERA_HEIGHT_MAX - CAMERA_HEIGHT_MIN);
+    // Negative dy because moving the mouse up should look up.
+    this.pitch -= dy * MOUSE_PITCH_RAD_PER_PIXEL;
+    if (this.pitch < CAMERA_PITCH_MIN) this.pitch = CAMERA_PITCH_MIN;
+    if (this.pitch > CAMERA_PITCH_MAX) this.pitch = CAMERA_PITCH_MAX;
   }
 
   private handleMovement(dt: number): boolean {
@@ -540,12 +499,10 @@ export class Player {
 
     if (dz === 0 && dx === 0) return false;
 
-    // Movement is relative to the player's facing (which is locked to yaw).
-    // Forward = +Z when yaw=0; rotate by yaw to get world-space direction.
-    const sin = Math.sin(this.yaw);
-    const cos = Math.cos(this.yaw);
-    let wx = dx * cos + dz * sin;
-    let wz = -dx * sin + dz * cos;
+    // Modern TPS controls are camera-relative: W moves along the screen's
+    // forward axis, A/D strafe using the camera's flattened right vector.
+    let wx = this.right.x * dx + this.flatForward.x * dz;
+    let wz = this.right.z * dx + this.flatForward.z * dz;
     const len = Math.hypot(wx, wz);
     if (len > 0) {
       wx /= len;
@@ -557,6 +514,116 @@ export class Player {
 
     this.root.position.x += wx * speed * dt;
     this.root.position.z += wz * speed * dt;
+    return true;
+  }
+
+  private syncRootRotation(): void {
+    const rotation = this.root.rotationQuaternion;
+    if (!rotation) {
+      this.root.rotationQuaternion = Quaternion.RotationYawPitchRoll(
+        this.yaw,
+        0,
+        0,
+      );
+      return;
+    }
+    Quaternion.RotationYawPitchRollToRef(this.yaw, 0, 0, rotation);
+  }
+
+  private updateCameraBasis(): void {
+    const sinYaw = Math.sin(this.yaw);
+    const cosYaw = Math.cos(this.yaw);
+    const cosPitch = Math.cos(this.pitch);
+
+    this.flatForward.set(sinYaw, 0, cosYaw);
+    this.right.set(cosYaw, 0, -sinYaw);
+    this.lookForward.set(
+      sinYaw * cosPitch,
+      Math.sin(this.pitch),
+      cosYaw * cosPitch,
+    );
+  }
+
+  private updateCamera(): void {
+    this.aimOrigin.copyFrom(this.root.position);
+    this.aimOrigin.y += CAMERA_AIM_HEIGHT;
+
+    this.desiredCameraPosition.copyFrom(this.aimOrigin);
+    this.desiredCameraPosition.x +=
+      this.right.x * CAMERA_SHOULDER_OFFSET_X -
+      this.flatForward.x * CAMERA_DISTANCE;
+    this.desiredCameraPosition.y += CAMERA_SHOULDER_OFFSET_Y;
+    this.desiredCameraPosition.z +=
+      this.right.z * CAMERA_SHOULDER_OFFSET_X -
+      this.flatForward.z * CAMERA_DISTANCE;
+
+    this.resolveCameraCollision(
+      this.aimOrigin,
+      this.desiredCameraPosition,
+      this.resolvedCameraPosition,
+    );
+    this.camera.position.copyFrom(this.resolvedCameraPosition);
+
+    this.cameraTarget.copyFrom(this.aimOrigin);
+    this.cameraTarget.x += this.lookForward.x * CAMERA_LOOK_AHEAD;
+    this.cameraTarget.y += this.lookForward.y * CAMERA_LOOK_AHEAD;
+    this.cameraTarget.z += this.lookForward.z * CAMERA_LOOK_AHEAD;
+    this.camera.setTarget(this.cameraTarget);
+  }
+
+  private resolveCameraCollision(
+    origin: Vector3,
+    desired: Vector3,
+    out: Vector3,
+  ): void {
+    const dx = desired.x - origin.x;
+    const dy = desired.y - origin.y;
+    const dz = desired.z - origin.z;
+    const distance = Math.hypot(dx, dy, dz);
+    if (distance <= 1e-4) {
+      out.copyFrom(desired);
+      return;
+    }
+
+    const invDistance = 1 / distance;
+    this.cameraRayDirection.set(
+      dx * invDistance,
+      dy * invDistance,
+      dz * invDistance,
+    );
+    this.cameraCollisionRay.origin.copyFrom(origin);
+    this.cameraCollisionRay.direction.copyFrom(this.cameraRayDirection);
+    this.cameraCollisionRay.length = distance;
+
+    const pick = this.scene.pickWithRay(this.cameraCollisionRay, (mesh) =>
+      this.shouldCameraCollideWith(mesh),
+    );
+    if (!pick?.hit || pick.distance >= distance) {
+      out.copyFrom(desired);
+      return;
+    }
+
+    const safeDistance = Math.min(
+      distance,
+      Math.max(
+        CAMERA_COLLISION_MIN_DISTANCE,
+        pick.distance - CAMERA_COLLISION_BUFFER,
+      ),
+    );
+    out.copyFrom(origin);
+    out.x += this.cameraRayDirection.x * safeDistance;
+    out.y += this.cameraRayDirection.y * safeDistance;
+    out.z += this.cameraRayDirection.z * safeDistance;
+  }
+
+  private shouldCameraCollideWith(mesh: AbstractMesh): boolean {
+    if (!mesh.isEnabled() || !mesh.isVisible) return false;
+    if (mesh === this.root || mesh.isDescendantOf(this.root)) return false;
+    if (mesh.name.startsWith("weapon")) return false;
+    if (mesh.name.startsWith("lootBeam")) return false;
+    if (mesh.name.startsWith("lootDrop")) return false;
+    if (mesh.name.startsWith("enemy-")) return false;
+    if (mesh.name.startsWith("ufo-tracer")) return false;
     return true;
   }
 
