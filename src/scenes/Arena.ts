@@ -11,11 +11,41 @@
 // the perimeter so adjacent segments butt cleanly. Wall facings rotate
 // to face into the courtyard center.
 
-import type { Scene } from "@babylonjs/core/scene.js";
+import { Scene } from "@babylonjs/core/scene.js";
+import type { AbstractEngine } from "@babylonjs/core/Engines/abstractEngine.js";
 import type { AssetContainer } from "@babylonjs/core/assetContainer.js";
 import { Vector3 } from "@babylonjs/core/Maths/math.vector.js";
+import { Color4 } from "@babylonjs/core/Maths/math.color.js";
+import { HemisphericLight } from "@babylonjs/core/Lights/hemisphericLight.js";
+import { DirectionalLight } from "@babylonjs/core/Lights/directionalLight.js";
 import { BoundingBox } from "@babylonjs/core/Culling/boundingBox.js";
+import type { AbstractMesh } from "@babylonjs/core/Meshes/abstractMesh.js";
+
 import { loadGLB } from "../utils/AssetLoader.js";
+import { getDeltaSeconds } from "../utils/time.js";
+
+import { Player } from "../entities/Player.js";
+import { Input } from "../input/Input.js";
+import { Weapon } from "../entities/Weapon.js";
+import { Enemy } from "../entities/Enemy.js";
+import {
+  spawnLoot,
+  nearestPickup,
+  dispose as disposeLoot,
+} from "../systems/LootSystem.js";
+import { fire as combatFire } from "../systems/Combat.js";
+
+import {
+  Archetype,
+  type WeaponStats,
+} from "../data/WeaponArchetype.js";
+import { RarityTier, RARITY_WEIGHT } from "../data/Rarity.js";
+import {
+  WEAPONS_BY_ARCHETYPE,
+  pickWeaponEntry,
+  type WeaponEntry,
+} from "../data/WeaponDatabase.js";
+import { rollWeapon } from "../systems/StatRoll.js";
 
 const ASSET_BASE = "/assets/environment";
 
@@ -355,4 +385,340 @@ export async function buildArena(scene: Scene): Promise<ArenaInfo> {
       new Vector3(HALF + 1, 10, HALF + 1),
     ),
   };
+}
+
+// ---------------------------------------------------------------------------
+// Phase 5 — full gameplay scene wired around the arena geometry.
+// ---------------------------------------------------------------------------
+// `createArenaScene` is the entry-point used by main.ts now that the dev
+// sandbox phase is over. It composes the existing pieces — Player, Weapon,
+// Enemy, LootSystem, Combat — into a single playable scene:
+//   • spawns the player at Arena.spawnPoint with a starter RIFLE
+//   • places 3 zombies + 1 UFO at hand-picked courtyard positions
+//   • routes left-click → Combat.fire → enemyByMesh.get(hit.mesh)?.takeDamage
+//   • routes enemy.onAttack → player.takeDamage
+//   • routes enemy.onDeath → spawnLoot with rarity-weighted by enemy type
+//   • clamps the player to Arena.bounds each frame
+//   • picks up the nearest loot drop on E
+// All wiring is contained in this function — no new global registries.
+
+const ZOMBIE_BASIC_PATH = "/assets/characters/Zombie_Basic.gltf";
+const ZOMBIE_CHUBBY_PATH = "/assets/characters/Zombie_Chubby.gltf";
+const ZOMBIE_RIBCAGE_PATH = "/assets/characters/Zombie_Ribcage.gltf";
+const UFO_PATH = "/assets/enemies/enemy-ufo-a.glb";
+
+// Heavy-tail rarity table for the UFO. UFOs are tougher and rarer than
+// zombies, so when they die we want the loot to skew toward the middle/high
+// tiers rather than COMMON. Total = 100 to match RARITY_WEIGHT's mental
+// model; relative weights are 10/25/30/25/10 across the 5 tiers.
+const UFO_RARITY_WEIGHT: Record<RarityTier, number> = {
+  [RarityTier.COMMON]: 10,
+  [RarityTier.UNCOMMON]: 25,
+  [RarityTier.RARE]: 30,
+  [RarityTier.EPIC]: 25,
+  [RarityTier.LEGENDARY]: 10,
+};
+
+const ALL_ARCHETYPES: Archetype[] = [
+  Archetype.PISTOL,
+  Archetype.SMG,
+  Archetype.RIFLE,
+  Archetype.SHOTGUN,
+  Archetype.BLASTER,
+];
+
+/**
+ * Build the full gameplay scene used by main.ts. Returns a ready-to-render
+ * Scene whose lifecycle is owned by the caller (main.ts disposes on HMR).
+ *
+ * Public surface mirrors `createGameScene(engine, canvas) -> Scene` so the
+ * import swap in main.ts is a one-line change.
+ */
+export async function createArenaScene(
+  engine: AbstractEngine,
+  canvas: HTMLCanvasElement,
+): Promise<Scene> {
+  const scene = new Scene(engine);
+  // Wasteland sky — desaturated dusk so the Kenney prop palette pops.
+  scene.clearColor = new Color4(0.5, 0.55, 0.6, 1);
+
+  // Lighting: hemispheric for cheap ambient + a directional sun for shape.
+  const hemi = new HemisphericLight("hemi", new Vector3(0, 1, 0), scene);
+  hemi.intensity = 0.55;
+  const sun = new DirectionalLight("sun", new Vector3(-0.4, -1, -0.6), scene);
+  sun.intensity = 0.9;
+  sun.position = new Vector3(20, 30, 20);
+
+  // Build the courtyard geometry (perimeter walls, props, building shells).
+  const { spawnPoint, bounds } = await buildArena(scene);
+
+  // Input + player. We construct the player at the spawn point so the first
+  // rendered frame doesn't show a one-frame teleport from origin to spawn.
+  const input = new Input();
+  const player = new Player(scene, canvas, input);
+  await player.init();
+  player.setSpawnPoint(spawnPoint);
+  player.rootMesh.position.copyFrom(spawnPoint);
+  player.hideGuitarMesh();
+
+  // Starter weapon — a COMMON rifle from the Quaternius pack. We pick a
+  // specific entry rather than randomising so first-load is reproducible.
+  const starterArchetype = Archetype.RIFLE;
+  const starterEntry = WEAPONS_BY_ARCHETYPE[starterArchetype][0];
+  if (!starterEntry) {
+    throw new Error("Arena: WEAPONS_BY_ARCHETYPE has no RIFLE entries");
+  }
+  const starterStats = rollWeapon(starterArchetype, RarityTier.COMMON);
+  const weapon = await Weapon.create(
+    scene,
+    {
+      stats: starterStats,
+      rarity: RarityTier.COMMON,
+      meshPath: starterEntry.meshPath,
+      displayName: starterEntry.displayName,
+    },
+    player.getRightHandTransform(),
+  );
+
+  // ---- enemies + mesh→Enemy registry for damage routing ----
+  // The Combat raycast returns whichever picked sub-mesh got hit, but
+  // damage has to be applied on the owning Enemy instance. We populate a
+  // Map<AbstractMesh, Enemy> at spawn time over each enemy's full mesh
+  // hierarchy; the click handler does an O(1) lookup on the picked mesh.
+  const enemyByMesh = new Map<AbstractMesh, Enemy>();
+  const enemies: Enemy[] = [];
+
+  function registerEnemy(enemy: Enemy): void {
+    for (const mesh of enemy.getMeshes()) {
+      enemyByMesh.set(mesh, enemy);
+    }
+    enemy.onDeath.addOnce(() => {
+      for (const mesh of enemy.getMeshes()) {
+        enemyByMesh.delete(mesh);
+      }
+      handleEnemyDeath(enemy);
+    });
+    enemies.push(enemy);
+  }
+
+  // Hand-picked positions in the courtyard — three zombies clustered to the
+  // northeast and a UFO patrolling overhead. Coordinates fall well inside
+  // HALF=24 so they're visible from the spawn point.
+  const zombieBasic = await Enemy.create(scene, ZOMBIE_BASIC_PATH, {
+    type: "zombie",
+    position: new Vector3(8, 0, 6),
+    speed: 3,
+    detectionRadius: 18,
+    attackRange: 2,
+    attackCooldown: 1,
+  });
+  registerEnemy(zombieBasic);
+
+  const zombieChubby = await Enemy.create(scene, ZOMBIE_CHUBBY_PATH, {
+    type: "zombie",
+    position: new Vector3(-7, 0, 9),
+    speed: 2.2,
+    detectionRadius: 18,
+    attackRange: 2,
+    attackCooldown: 1,
+    scaling: 1.15,
+  });
+  registerEnemy(zombieChubby);
+
+  const zombieRibcage = await Enemy.create(scene, ZOMBIE_RIBCAGE_PATH, {
+    type: "zombie",
+    position: new Vector3(2, 0, -10),
+    speed: 3.6,
+    detectionRadius: 18,
+    attackRange: 2,
+    attackCooldown: 1,
+    scaling: 0.9,
+  });
+  registerEnemy(zombieRibcage);
+
+  const ufo = await Enemy.create(
+    scene,
+    UFO_PATH,
+    {
+      type: "ufo",
+      position: new Vector3(0, 6, 12),
+      hp: 80,
+      damage: 8,
+      hoverHeight: 6,
+      fireInterval: 2,
+      detectionRadius: 30,
+      scaling: 2,
+    },
+    "ufoDisc",
+  );
+  registerEnemy(ufo);
+
+  // Death handler — rolls a weapon archetype + rarity weighted by enemy type
+  // and spawns a LootDrop where the enemy fell. UFOs use the heavier
+  // UFO_RARITY_WEIGHT so their drops skew toward EPIC/LEGENDARY.
+  function handleEnemyDeath(deadEnemy: Enemy): void {
+    const archetype = pickRandom(ALL_ARCHETYPES);
+    const weights =
+      deadEnemy.type === "ufo" ? UFO_RARITY_WEIGHT : RARITY_WEIGHT;
+    const rarity = rollRarityWeighted(weights);
+    const entry: WeaponEntry = pickWeaponEntry(archetype);
+    const stats: WeaponStats = rollWeapon(archetype, rarity);
+    const dropPos = deadEnemy.position.clone();
+    // Anchor drop slightly above ground so the beam base sits on the floor.
+    dropPos.y = 0;
+    spawnLoot(scene, dropPos, stats, rarity, entry.meshPath);
+    console.log(
+      `[Arena] ${deadEnemy.type} died — dropped ${Archetype[archetype]} ` +
+        `(${RarityTier[rarity]})`,
+    );
+  }
+
+  // ---- enemy attack → player damage ----
+  for (const e of enemies) {
+    e.onAttack.add((evt) => {
+      player.takeDamage(evt.damage);
+      console.log(
+        `[Arena] hit by ${evt.enemy.type} for ${evt.damage} (HP=${player.hp})`,
+      );
+    });
+  }
+
+  // ---- left-click fire ----
+  // Combat.fire raycasts from the active camera, picks the world, and asks
+  // the weapon to consume ammo + draw visuals. We supply a predicate that
+  // skips the player's own meshes, the weapon's own meshes, and any LootDrop
+  // beam/weapon-mesh — those should never absorb a shot.
+  const playerRoot = player.rootMesh;
+  const weaponBarrelTipName = "weaponBarrelTip";
+
+  function isPlayerOrWeaponOrLoot(mesh: AbstractMesh): boolean {
+    if (mesh === playerRoot) return true;
+    if (mesh.isDescendantOf(playerRoot)) return true;
+    if (mesh.name === weaponBarrelTipName) return true;
+    if (mesh.name.startsWith("weapon")) return true;
+    if (mesh.name.startsWith("lootBeam")) return true;
+    if (mesh.name.startsWith("lootDrop")) return true;
+    return false;
+  }
+
+  // Combat already filters non-pickable meshes; we tighten its mesh-name
+  // checks here by re-applying isPickable + name filtering at the source.
+  // Because Combat.fire owns the raycast (we don't), we ensure pickable
+  // exclusions are right by toggling isPickable on the player + weapon
+  // hierarchies. Player meshes are skinned and pickable by default.
+  for (const mesh of scene.meshes) {
+    if (isPlayerOrWeaponOrLoot(mesh)) {
+      mesh.isPickable = false;
+    }
+  }
+  // Re-tag any mesh that gets created later (e.g. lazy-loaded loot drops)
+  // when it enters the scene. This catches the LootDrop weapon mesh that
+  // streams in after spawnLoot resolves.
+  scene.onNewMeshAddedObservable.add((mesh) => {
+    if (isPlayerOrWeaponOrLoot(mesh as AbstractMesh)) {
+      (mesh as AbstractMesh).isPickable = false;
+    }
+  });
+
+  const unsubscribeFire = input.onClick(0, () => {
+    // Only fire while pointer is locked — clicking to lock the pointer
+    // shouldn't also waste a bullet.
+    if (!document.pointerLockElement) return;
+    const hit = combatFire(weapon, scene);
+    if (!hit) return;
+    const target = enemyByMesh.get(hit.mesh);
+    if (target) {
+      target.takeDamage(weapon.stats.damage);
+    }
+  });
+
+  // ---- E key picks up nearest drop ----
+  let eWasDown = false;
+
+  // ---- per-frame tick ----
+  const beforeRender = scene.onBeforeRenderObservable.add(() => {
+    const dt = getDeltaSeconds(scene);
+    if (dt <= 0) return;
+
+    weapon.update(dt);
+    for (const e of enemies) {
+      e.update(player, dt);
+    }
+
+    // Bounds clamp last so any late motion (Player.update via its own
+    // observer) is contained. Babylon dispatches observers in registration
+    // order; Player.init() registers first, so its update has already run
+    // before this callback fires.
+    player.clampToBounds(bounds);
+
+    // E keypress edge — single fire on transition from up to down.
+    const eNow = input.isDown("e");
+    if (eNow && !eWasDown) {
+      const drop = nearestPickup(player);
+      if (drop) {
+        console.log(
+          `[Arena] picked up ${RarityTier[drop.rarity]} weapon`,
+          drop.weapon,
+        );
+        disposeLoot(drop);
+      }
+    }
+    eWasDown = eNow;
+  });
+
+  // ---- teardown ----
+  scene.onDisposeObservable.addOnce(() => {
+    scene.onBeforeRenderObservable.remove(beforeRender);
+    unsubscribeFire();
+    for (const e of enemies) e.dispose();
+    weapon.dispose();
+    player.dispose();
+    input.dispose();
+  });
+
+  // Debug global so the browser console can poke at scene state.
+  if (import.meta.env.DEV) {
+    (window as unknown as { __scene?: Scene }).__scene = scene;
+  }
+
+  return scene;
+}
+
+// -- helpers --
+
+function pickRandom<T>(arr: readonly T[]): T {
+  if (arr.length === 0) {
+    throw new Error("Arena.pickRandom: empty array");
+  }
+  const idx = Math.floor(Math.random() * arr.length);
+  const value = arr[idx];
+  if (value === undefined) {
+    throw new Error("Arena.pickRandom: index out of range");
+  }
+  return value;
+}
+
+/**
+ * Walk a weighted rarity table once and pick a tier. Mirrors the LootDemo
+ * helper so per-enemy weight tables (RARITY_WEIGHT / UFO_RARITY_WEIGHT) get
+ * the same treatment.
+ */
+function rollRarityWeighted(
+  weights: Record<RarityTier, number>,
+): RarityTier {
+  const tiers: RarityTier[] = [
+    RarityTier.COMMON,
+    RarityTier.UNCOMMON,
+    RarityTier.RARE,
+    RarityTier.EPIC,
+    RarityTier.LEGENDARY,
+  ];
+  let total = 0;
+  for (const t of tiers) total += weights[t];
+  let pick = Math.random() * total;
+  for (const t of tiers) {
+    pick -= weights[t];
+    if (pick <= 0) return t;
+  }
+  return RarityTier.COMMON;
 }

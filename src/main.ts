@@ -3,7 +3,7 @@ import "@babylonjs/core/Engines/webgpuEngine.js";
 import "@babylonjs/loaders/glTF/index.js";
 import type { AbstractEngine } from "@babylonjs/core/Engines/abstractEngine.js";
 import type { Scene } from "@babylonjs/core/scene.js";
-import { createGameScene } from "./scenes/Game.js";
+import { createArenaScene as createGameScene } from "./scenes/Arena.js";
 
 const canvas = document.getElementById("renderCanvas") as HTMLCanvasElement;
 
