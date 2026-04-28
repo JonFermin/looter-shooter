@@ -273,11 +273,15 @@ export class Hud {
       return;
     }
     if (state.status === "active") {
+      const bossLabel = state.isBossWave ? "  [BOSS]" : "";
       this.waveText.text =
-        `Wave ${state.waveNumber} — ` +
+        `Wave ${state.waveNumber}${bossLabel} — ` +
         `${state.enemiesAlive}/${state.enemiesTotal} enemies`;
+      this.waveText.color = state.isBossWave ? "#ff5555" : "#FFFFFF";
       return;
     }
+    // Reset to white for non-active states (breather countdown, complete).
+    this.waveText.color = "#FFFFFF";
     if (state.status === "breather") {
       const seconds = Math.max(1, Math.ceil(state.breatherTimeRemaining));
       this.waveText.text =

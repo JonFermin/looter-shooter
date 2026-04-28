@@ -29,11 +29,13 @@ import type { Enemy } from "../entities/Enemy.js";
 export type ZombieVariant = "basic" | "chubby" | "ribcage";
 export type SpawnUnit =
   | { kind: "zombie"; variant: ZombieVariant }
-  | { kind: "ufo" };
+  | { kind: "ufo" }
+  | { kind: "boss" };
 
 export interface WaveDefinition {
   zombies: number;
   ufos: number;
+  bossCount: number;
   hpMultiplier: number;
 }
 
@@ -45,6 +47,7 @@ export interface WaveState {
   enemiesTotal: number;
   status: WaveStatus;
   breatherTimeRemaining: number;
+  isBossWave: boolean;
 }
 
 export interface WaveSpawnerOptions {
@@ -76,6 +79,7 @@ const SPAWN_INSET = 2;
 const UFO_SPAWN_HEIGHT = 6;
 const ZOMBIE_BASE_HP = 30;
 const UFO_BASE_HP = 80;
+const BOSS_BASE_HP = 250;
 const ZOMBIE_VARIANTS: ZombieVariant[] = ["basic", "chubby", "ribcage"];
 
 /**
@@ -85,14 +89,17 @@ const ZOMBIE_VARIANTS: ZombieVariant[] = ["basic", "chubby", "ribcage"];
  * having fun rather than seeing "All waves cleared" and stopping.
  */
 function getWaveDefinition(wave: number): WaveDefinition {
-  if (wave === 1) return { zombies: 3, ufos: 0, hpMultiplier: 1.0 };
-  if (wave === 2) return { zombies: 5, ufos: 1, hpMultiplier: 1.0 };
-  if (wave === 3) return { zombies: 8, ufos: 2, hpMultiplier: 1.5 };
-  // Wave 4+: linear growth. Zombies = 3 + 2·wave, UFOs = floor(wave/2),
-  // hp scalar = 1.0 + 0.5·(wave - 1). Wave 4: 11z + 2u @ 2.5x HP.
+  const isBoss = wave > 0 && wave % 5 === 0;
+  if (wave === 1) return { zombies: 3, ufos: 0, bossCount: 0, hpMultiplier: 1.0 };
+  if (wave === 2) return { zombies: 5, ufos: 1, bossCount: 0, hpMultiplier: 1.0 };
+  if (wave === 3) return { zombies: 8, ufos: 2, bossCount: 0, hpMultiplier: 1.5 };
+  // Wave 4+: linear growth. On boss waves the regular spawn count is
+  // halved and UFOs drop to zero so the boss reads as the centerpiece
+  // threat rather than getting drowned in chaff.
   return {
-    zombies: 3 + wave * 2,
-    ufos: Math.floor(wave / 2),
+    zombies: isBoss ? Math.floor((3 + wave * 2) / 2) : 3 + wave * 2,
+    ufos: isBoss ? 0 : Math.floor(wave / 2),
+    bossCount: isBoss ? 1 : 0,
     hpMultiplier: 1.0 + (wave - 1) * 0.5,
   };
 }
@@ -127,6 +134,7 @@ export class WaveSpawner {
       enemiesTotal: this.enemiesTotal,
       status: this.status,
       breatherTimeRemaining: this.breatherTimeRemaining,
+      isBossWave: this.waveNumber > 0 && this.waveNumber % 5 === 0,
     };
   }
 
@@ -204,7 +212,7 @@ export class WaveSpawner {
   private async beginWave(n: number): Promise<void> {
     this.waveNumber = n;
     const def = getWaveDefinition(n);
-    const total = def.zombies + def.ufos;
+    const total = def.zombies + def.ufos + def.bossCount;
     this.enemiesTotal = total;
     this.enemiesAlive = total;
     this.status = "active";
@@ -224,6 +232,9 @@ export class WaveSpawner {
     for (let i = 0; i < def.ufos; i++) {
       units.push({ kind: "ufo" });
     }
+    for (let i = 0; i < def.bossCount; i++) {
+      units.push({ kind: "boss" });
+    }
 
     // Spawn in parallel — each call already gates on its own GLB load,
     // and the Enemy.create path tolerates concurrent loads thanks to the
@@ -233,7 +244,12 @@ export class WaveSpawner {
     for (const unit of units) {
       const pos = pickSpawnPosition(this.opts.bounds, playerPos);
       if (unit.kind === "ufo") pos.y = UFO_SPAWN_HEIGHT;
-      const baseHp = unit.kind === "ufo" ? UFO_BASE_HP : ZOMBIE_BASE_HP;
+      const baseHp =
+        unit.kind === "ufo"
+          ? UFO_BASE_HP
+          : unit.kind === "boss"
+            ? BOSS_BASE_HP
+            : ZOMBIE_BASE_HP;
       const hp = Math.round(baseHp * def.hpMultiplier);
       tasks.push(this.opts.spawnEnemy(unit, pos, hp));
     }

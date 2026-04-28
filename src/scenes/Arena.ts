@@ -441,6 +441,16 @@ const UFO_RARITY_WEIGHT: Record<RarityTier, number> = {
   [RarityTier.LEGENDARY]: 10,
 };
 
+// Bosses are milestone kills — guaranteed RARE+ drop. Skew toward EPIC so
+// the player feels the payoff but LEGENDARY still requires a touch of luck.
+const BOSS_RARITY_WEIGHT: Record<RarityTier, number> = {
+  [RarityTier.COMMON]: 0,
+  [RarityTier.UNCOMMON]: 0,
+  [RarityTier.RARE]: 30,
+  [RarityTier.EPIC]: 45,
+  [RarityTier.LEGENDARY]: 25,
+};
+
 const ALL_ARCHETYPES: Archetype[] = [
   Archetype.PISTOL,
   Archetype.SMG,
@@ -622,6 +632,22 @@ export async function createArenaScene(
         },
         "ufoDisc",
       );
+    } else if (unit.kind === "boss") {
+      // Reuses the Chubby zombie mesh at 2.5× scale. Bigger detection
+      // radius means the boss commits to the player on spawn rather than
+      // idling out of melee range, and the longer attackRange + slower
+      // speed make the wind-up feel telegraphed but inevitable.
+      enemy = await Enemy.create(scene, ZOMBIE_CHUBBY_PATH, {
+        type: "boss",
+        position,
+        hp,
+        damage: 25,
+        speed: 2.0,
+        detectionRadius: 30,
+        attackRange: 2.5,
+        attackCooldown: 1.5,
+        scaling: 2.5,
+      });
     } else {
       const path =
         unit.variant === "basic"
@@ -672,7 +698,9 @@ export async function createArenaScene(
       // tougher enemy so they pay 5x what a zombie does. Numbers are
       // placeholders pending Phase 9's economy pass.
       player.addKill();
-      player.addCurrency(dead.type === "ufo" ? 25 : 5);
+      const reward =
+        dead.type === "boss" ? 100 : dead.type === "ufo" ? 25 : 5;
+      player.addCurrency(reward);
       persist();
       // We deliberately leave `dead` in the `enemies` array — Enemy.update
       // still needs to drive the death sink-and-fade tween for ~800ms,
@@ -704,7 +732,11 @@ export async function createArenaScene(
   function handleEnemyDeath(deadEnemy: Enemy): void {
     const archetype = pickRandom(ALL_ARCHETYPES);
     const weights =
-      deadEnemy.type === "ufo" ? UFO_RARITY_WEIGHT : RARITY_WEIGHT;
+      deadEnemy.type === "boss"
+        ? BOSS_RARITY_WEIGHT
+        : deadEnemy.type === "ufo"
+          ? UFO_RARITY_WEIGHT
+          : RARITY_WEIGHT;
     const rarity = rollRarityWeighted(weights);
     const entry: WeaponEntry = pickWeaponEntry(archetype);
     const stats: WeaponStats = rollWeapon(archetype, rarity);

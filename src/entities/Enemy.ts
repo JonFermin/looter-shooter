@@ -30,7 +30,14 @@ import { loadGLB } from "../utils/AssetLoader.js";
 import { EnemyState, EnemyStateMachine } from "../ai/EnemyStateMachine.js";
 import { play, playRandom, SCREAM_KEYS } from "../audio/AudioManager.js";
 
-export type EnemyType = "zombie" | "ufo";
+export type EnemyType = "zombie" | "ufo" | "boss";
+
+// Boss reuses the zombie state machine + animations (it's a buffed Chubby
+// zombie). Anywhere we previously branched on `type === "zombie"` we now
+// route through this helper so bosses inherit the same ground-AI path.
+function isGroundUnit(t: EnemyType): boolean {
+  return t === "zombie" || t === "boss";
+}
 
 export interface EnemyOptions {
   type: EnemyType;
@@ -173,8 +180,8 @@ export class Enemy {
 
     this.wireStateHandlers();
 
-    // Ensure idle is the visible starting clip for zombies.
-    if (this.opts.type === "zombie") {
+    // Ensure idle is the visible starting clip for ground units (zombies + bosses).
+    if (isGroundUnit(this.opts.type)) {
       this.playAnim(this.animIdle, /*loop=*/ true);
     }
   }
@@ -250,6 +257,7 @@ export class Enemy {
       return;
     }
 
+    // Zombies and bosses share the same ground-unit chase/attack loop.
     this.updateZombie(playerTarget, dtSec);
   }
 
@@ -290,7 +298,7 @@ export class Enemy {
   // ---------- internals ----------
 
   private wireStateHandlers(): void {
-    if (this.opts.type !== "zombie") return;
+    if (!isGroundUnit(this.opts.type)) return;
 
     this.stateMachine.onEnter(EnemyState.IDLE, () => {
       this.playAnim(this.animIdle, true);
