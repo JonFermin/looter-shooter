@@ -42,7 +42,7 @@
 
 ## Phase 1 — Scaffold
 
-- TODO [P0] [M] #1: Bootstrap project from `babylon-template`, install `@babylonjs/loaders` + `@babylonjs/gui` + `eslint` (with TS plugin), set up GLB loader side-effect import, smoke-test render — scope: `./` (root: `package.json`, `tsconfig.json`, `vite.config.ts`, `index.html`, `.eslintrc.cjs`, `src/main.ts`, `src/scenes/Game.ts`, `src/utils/time.ts`, `CLAUDE.md`, `AI_RULES.md`, `.gitignore`)
+- IN PROGRESS [P0] [M] #1: Bootstrap project from `babylon-template`, install `@babylonjs/loaders` + `@babylonjs/gui` + `eslint` (with TS plugin), set up GLB loader side-effect import, smoke-test render — scope: `./` (root: `package.json`, `tsconfig.json`, `vite.config.ts`, `index.html`, `.eslintrc.cjs`, `src/main.ts`, `src/scenes/Game.ts`, `src/utils/time.ts`, `CLAUDE.md`, `AI_RULES.md`, `.gitignore`)
   AC: `build` exits 0; `lint` exits 0; `dev` server starts and `index.html` renders a Babylon canvas with one visible `MeshBuilder.CreateBox`, one `HemisphericLight`, an `ArcRotateCamera`, and zero console errors
 
 ## Phase 2 — Foundations (parallel)
