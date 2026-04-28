@@ -73,10 +73,10 @@ Key files: `src/scenes/Arena.ts` (extended), `src/entities/Player.ts` (extended)
 
 ## Phase 6 — HUD + Wave loop (parallel)
 
-- IN PROGRESS [P0] [L] #11: HUD overlay built with `@babylonjs/gui` — health bar, shield bar, ammo counter, crosshair PNG — depends: #5 ✓, #7 ✓ — scope: `src/ui/Hud.ts`, `src/main.ts`, `src/scenes/Arena.ts`, `src/entities/Player.ts`
+- DONE [P0] [L] #11: HUD overlay built with `@babylonjs/gui` — health bar, shield bar, ammo counter, crosshair PNG — depends: #5 ✓, #7 ✓ — scope: `src/ui/Hud.ts`, `src/main.ts`, `src/scenes/Arena.ts`, `src/entities/Player.ts`
   AC: `build` exits 0; `lint` exits 0; `dev` shows a HUD `AdvancedDynamicTexture` overlay with: a health bar bottom-left that drains as the player takes damage and refills on `Pickup_Health`; a shield bar above it (regen 5/s after 3s out of combat, max 100); a `current/reserve` ammo readout bottom-right; a centered crosshair from `kenney/2d/crosshair-pack` rendered around the pointer-lock cursor; HUD updates every frame and disposes cleanly on scene change
 
-- TODO [P0] [L] #12: Wave spawner — clear-based escalating waves with 5s breather, count + HP scaling — depends: #6 ✓, #8 ✓, #10 ✓ — scope: `src/systems/WaveSpawner.ts`, `src/scenes/Arena.ts`, `src/ui/Hud.ts`
+- IN PROGRESS [P0] [L] #12: Wave spawner — clear-based escalating waves with 5s breather, count + HP scaling — depends: #6 ✓, #8 ✓, #10 ✓, #11 ✓ — scope: `src/systems/WaveSpawner.ts`, `src/scenes/Arena.ts`, `src/ui/Hud.ts`
   AC: `build` exits 0; `lint` exits 0; `dev` in `Arena` — wave 1 spawns 3 Basic zombies; clearing all enemies starts a 5s breather then wave 2 spawns 5 zombies (mix of variants) + 1 UFO; wave 3 spawns 8 zombies + 2 UFOs with 1.5× HP; HUD displays `Wave N — X/Y enemies` indicator; spawn positions are randomized within the arena bounds but ≥10 units from the player
 
 ## Phase 7 — Inventory + Loot polish (parallel)
