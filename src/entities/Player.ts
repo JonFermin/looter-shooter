@@ -97,6 +97,17 @@ export class Player {
   private _maxHp = 100;
   private _spawnPoint = new Vector3(0, 0, 0);
 
+  // Shield: regenerating overshield that absorbs damage before HP. Drains
+  // first on takeDamage(); overflow rolls into HP. Out-of-combat for
+  // _shieldRegenDelay seconds re-engages the regen at _shieldRegenRate
+  // points/sec until full. _timeSinceLastDamage resets to 0 every time the
+  // player is hit so sustained pressure prevents regen.
+  private _shield = 100;
+  private _maxShield = 100;
+  private readonly _shieldRegenRate = 5; // points/sec
+  private readonly _shieldRegenDelay = 3; // sec out of combat before regen
+  private _timeSinceLastDamage = 0;
+
   // Keep references so dispose() can detach/clean up.
   private beforeRenderObserver: Nullable<Observer<Scene>> = null;
   private clickListener?: () => void;
@@ -197,6 +208,16 @@ export class Player {
     return this._maxHp;
   }
 
+  /** Current shield points (0..maxShield). Shields absorb damage before HP. */
+  get shield(): number {
+    return this._shield;
+  }
+
+  /** Maximum shield points. */
+  get maxShield(): number {
+    return this._maxShield;
+  }
+
   /**
    * Where the player respawns when HP hits zero. Defaults to (0,0,0); the
    * Arena scene calls this with `Arena.spawnPoint` once buildArena resolves.
@@ -208,27 +229,41 @@ export class Player {
   }
 
   /**
-   * Apply incoming damage to the player. Clamps HP at 0. When HP reaches 0
-   * we trigger an immediate respawn (no death animation yet — Phase 6 will
-   * own the proper death state + UI). Damage values <= 0 are no-ops.
+   * Apply incoming damage to the player. Shield absorbs first (1:1) and any
+   * remainder spills into HP. Clamps HP at 0. When HP reaches 0 we trigger
+   * an immediate respawn (no death animation yet — Phase 6 will own the
+   * proper death state + UI). Damage values <= 0 are no-ops.
+   *
+   * Resets the out-of-combat regen timer to 0 every hit so sustained
+   * pressure prevents shield from regenerating mid-fight.
    */
   takeDamage(amount: number): void {
     if (amount <= 0) return;
     if (this._hp <= 0) return; // already dead, mid-respawn; ignore
-    this._hp = Math.max(0, this._hp - amount);
-    if (this._hp === 0) {
-      this.respawn();
+    this._timeSinceLastDamage = 0;
+    const shieldHit = Math.min(this._shield, amount);
+    this._shield -= shieldHit;
+    const hpHit = amount - shieldHit;
+    if (hpHit > 0) {
+      this._hp = Math.max(0, this._hp - hpHit);
+      if (this._hp === 0) {
+        this.respawn();
+      }
     }
   }
 
   /**
-   * Restore full HP and teleport back to the configured spawn point. Also
-   * clears in-flight jump velocity / grounded state so the player lands on
-   * the floor at the spawn rather than continuing a previous arc.
+   * Restore full HP + shield and teleport back to the configured spawn
+   * point. Also clears in-flight jump velocity / grounded state so the
+   * player lands on the floor at the spawn rather than continuing a
+   * previous arc, and resets the shield-regen cooldown so the next hit
+   * after respawn doesn't regen instantly.
    */
   respawn(): void {
     console.log("you died");
     this._hp = this._maxHp;
+    this._shield = this._maxShield;
+    this._timeSinceLastDamage = 0;
     this.root.position.copyFrom(this._spawnPoint);
     this.vy = 0;
     this.grounded = true;
@@ -429,6 +464,25 @@ export class Player {
     this.handleJumpAndGravity(dt);
     this.updateAnimationState(moved);
     this.crossfadeAnimations(dt);
+    this.updateShield(dt);
+  }
+
+  /**
+   * Tick the out-of-combat timer and regen shield once the delay has
+   * elapsed. Regen rate is constant (linear); when shield reaches max it
+   * stops being incremented but the timer keeps ticking harmlessly.
+   */
+  private updateShield(dt: number): void {
+    this._timeSinceLastDamage += dt;
+    if (
+      this._timeSinceLastDamage >= this._shieldRegenDelay &&
+      this._shield < this._maxShield
+    ) {
+      this._shield = Math.min(
+        this._maxShield,
+        this._shield + this._shieldRegenRate * dt,
+      );
+    }
   }
 
   private handleMouseLook(): void {
