@@ -47,5 +47,12 @@ export async function createGameScene(
     input.dispose();
   });
 
+  // Debug-only window hook so smoke tests / browser console can inspect
+  // scene state. Costs nothing in prod (v8 inlines the no-op condition for
+  // import.meta.env.DEV at build time).
+  if (import.meta.env.DEV) {
+    (window as unknown as { __scene?: Scene }).__scene = scene;
+  }
+
   return scene;
 }
