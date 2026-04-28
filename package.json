@@ -1,0 +1,28 @@
+{
+  "name": "looter-shooter",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "build:dev": "vite build",
+    "preview": "vite preview",
+    "lint": "eslint src/ --ext .ts"
+  },
+  "dependencies": {
+    "@babylonjs/core": "~8.56.2",
+    "@babylonjs/gui": "~8.56.2",
+    "@babylonjs/loaders": "~8.56.2"
+  },
+  "devDependencies": {
+    "@typescript-eslint/eslint-plugin": "^7.0.0",
+    "@typescript-eslint/parser": "^7.0.0",
+    "eslint": "^8.57.0",
+    "typescript": "~5.7.2",
+    "vite": "^6.3.4"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
