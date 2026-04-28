@@ -34,6 +34,10 @@ import {
   dispose as disposeLoot,
 } from "../systems/LootSystem.js";
 import { fire as combatFire } from "../systems/Combat.js";
+import {
+  WaveSpawner,
+  type SpawnUnit,
+} from "../systems/WaveSpawner.js";
 import { Hud } from "../ui/Hud.js";
 
 import {
@@ -489,70 +493,101 @@ export async function createArenaScene(
   const enemyByMesh = new Map<AbstractMesh, Enemy>();
   const enemies: Enemy[] = [];
 
-  function registerEnemy(enemy: Enemy): void {
+  // WaveSpawner delegates the actual Enemy.create to this callback so the
+  // Arena keeps ownership of the mesh→Enemy registry, the loot drop wiring,
+  // and the onAttack → player.takeDamage hookup. The spawner just decides
+  // *which* enemies to spawn, *where*, and *with what HP*.
+  async function spawnFromWave(
+    unit: SpawnUnit,
+    position: Vector3,
+    hp: number,
+  ): Promise<Enemy> {
+    let enemy: Enemy;
+    if (unit.kind === "ufo") {
+      enemy = await Enemy.create(
+        scene,
+        UFO_PATH,
+        {
+          type: "ufo",
+          position,
+          hp,
+          damage: 8,
+          hoverHeight: 6,
+          fireInterval: 2,
+          detectionRadius: 30,
+          scaling: 2,
+        },
+        "ufoDisc",
+      );
+    } else {
+      const path =
+        unit.variant === "basic"
+          ? ZOMBIE_BASIC_PATH
+          : unit.variant === "chubby"
+            ? ZOMBIE_CHUBBY_PATH
+            : ZOMBIE_RIBCAGE_PATH;
+      // Variant-specific feel knobs — chubby is slow & big, ribcage is
+      // fast & small, basic is the baseline. Mirrors the prior hand-placed
+      // tuning so wave 1's three Basics behave the same as before.
+      const speed =
+        unit.variant === "chubby"
+          ? 2.2
+          : unit.variant === "ribcage"
+            ? 3.6
+            : 3;
+      const scaling =
+        unit.variant === "chubby"
+          ? 1.15
+          : unit.variant === "ribcage"
+            ? 0.9
+            : 1;
+      enemy = await Enemy.create(scene, path, {
+        type: "zombie",
+        position,
+        hp,
+        speed,
+        detectionRadius: 18,
+        attackRange: 2,
+        attackCooldown: 1,
+        scaling,
+      });
+    }
+
+    // Mesh registry + death wiring. We notify the spawner BEFORE running
+    // the loot drop so the wave count refreshes ahead of any heavier
+    // mesh-instantiation work the loot drop kicks off.
     for (const mesh of enemy.getMeshes()) {
       enemyByMesh.set(mesh, enemy);
     }
-    enemy.onDeath.addOnce(() => {
+    enemy.onDeath.addOnce((dead) => {
       for (const mesh of enemy.getMeshes()) {
         enemyByMesh.delete(mesh);
       }
-      handleEnemyDeath(enemy);
+      spawner.notifyEnemyDeath(dead);
+      handleEnemyDeath(dead);
+      // We deliberately leave `dead` in the `enemies` array — Enemy.update
+      // still needs to drive the death sink-and-fade tween for ~800ms,
+      // and Enemy.update internally noops once the tween disposes itself.
+      // For a vertical slice the residual array growth across waves is
+      // negligible.
+    });
+    enemy.onAttack.add((evt) => {
+      player.takeDamage(evt.damage);
+      console.log(
+        `[Arena] hit by ${evt.enemy.type} for ${evt.damage} (HP=${player.hp})`,
+      );
     });
     enemies.push(enemy);
+    return enemy;
   }
 
-  // Hand-picked positions in the courtyard — three zombies clustered to the
-  // northeast and a UFO patrolling overhead. Coordinates fall well inside
-  // HALF=24 so they're visible from the spawn point.
-  const zombieBasic = await Enemy.create(scene, ZOMBIE_BASIC_PATH, {
-    type: "zombie",
-    position: new Vector3(8, 0, 6),
-    speed: 3,
-    detectionRadius: 18,
-    attackRange: 2,
-    attackCooldown: 1,
-  });
-  registerEnemy(zombieBasic);
-
-  const zombieChubby = await Enemy.create(scene, ZOMBIE_CHUBBY_PATH, {
-    type: "zombie",
-    position: new Vector3(-7, 0, 9),
-    speed: 2.2,
-    detectionRadius: 18,
-    attackRange: 2,
-    attackCooldown: 1,
-    scaling: 1.15,
-  });
-  registerEnemy(zombieChubby);
-
-  const zombieRibcage = await Enemy.create(scene, ZOMBIE_RIBCAGE_PATH, {
-    type: "zombie",
-    position: new Vector3(2, 0, -10),
-    speed: 3.6,
-    detectionRadius: 18,
-    attackRange: 2,
-    attackCooldown: 1,
-    scaling: 0.9,
-  });
-  registerEnemy(zombieRibcage);
-
-  const ufo = await Enemy.create(
+  const spawner = new WaveSpawner({
     scene,
-    UFO_PATH,
-    {
-      type: "ufo",
-      position: new Vector3(0, 6, 12),
-      hp: 80,
-      damage: 8,
-      hoverHeight: 6,
-      fireInterval: 2,
-      detectionRadius: 30,
-      scaling: 2,
-    },
-    "ufoDisc",
-  );
-  registerEnemy(ufo);
+    bounds,
+    player,
+    spawnEnemy: spawnFromWave,
+    breatherSeconds: 5,
+  });
 
   // Death handler — rolls a weapon archetype + rarity weighted by enemy type
   // and spawns a LootDrop where the enemy fell. UFOs use the heavier
@@ -572,16 +607,6 @@ export async function createArenaScene(
       `[Arena] ${deadEnemy.type} died — dropped ${Archetype[archetype]} ` +
         `(${RarityTier[rarity]})`,
     );
-  }
-
-  // ---- enemy attack → player damage ----
-  for (const e of enemies) {
-    e.onAttack.add((evt) => {
-      player.takeDamage(evt.damage);
-      console.log(
-        `[Arena] hit by ${evt.enemy.type} for ${evt.damage} (HP=${player.hp})`,
-      );
-    });
   }
 
   // ---- left-click fire ----
@@ -639,6 +664,14 @@ export async function createArenaScene(
   // pickup-to-equip) just need to point this getter at the new instance.
   const hud = new Hud(scene, player, () => weapon);
 
+  // Wire the wave indicator. setWaveState is called once eagerly so the
+  // "idle" → "active" transition can't beat the HUD to the first frame.
+  hud.setWaveState(spawner.state);
+  spawner.onStateChange.add((s) => hud.setWaveState(s));
+
+  // Kick off wave 1.
+  spawner.start();
+
   // ---- E key picks up nearest drop, R key reloads ----
   let eWasDown = false;
   let rWasDown = false;
@@ -649,6 +682,7 @@ export async function createArenaScene(
     if (dt <= 0) return;
 
     weapon.update(dt);
+    spawner.update(dt);
     for (const e of enemies) {
       e.update(player, dt);
     }
@@ -685,6 +719,7 @@ export async function createArenaScene(
   scene.onDisposeObservable.addOnce(() => {
     scene.onBeforeRenderObservable.remove(beforeRender);
     unsubscribeFire();
+    spawner.dispose();
     hud.dispose();
     for (const e of enemies) e.dispose();
     weapon.dispose();
@@ -701,11 +736,15 @@ export async function createArenaScene(
       __player?: Player;
       __weapon?: Weapon;
       __hud?: Hud;
+      __enemies?: Enemy[];
+      __spawner?: WaveSpawner;
     };
     w.__scene = scene;
     w.__player = player;
     w.__weapon = weapon;
     w.__hud = hud;
+    w.__enemies = enemies;
+    w.__spawner = spawner;
   }
 
   return scene;

@@ -33,6 +33,7 @@ import { Control } from "@babylonjs/gui/2D/controls/control.js";
 
 import type { Player } from "../entities/Player.js";
 import type { Weapon } from "../entities/Weapon.js";
+import type { WaveState } from "../systems/WaveSpawner.js";
 
 // Crosshair PNG: Kenney crosshair-pack #007 (clean broken-plus, white).
 // Picked by inspecting the preview sheet; reads cleanly against both the
@@ -67,6 +68,11 @@ const SHIELD_FILL_COLOR = "#22d3ee"; // cyan
 const AMMO_PADDING_RIGHT_PX = 24;
 const AMMO_PADDING_BOTTOM_PX = 24;
 
+// Wave indicator — top-center, sits clear of any future minimap and
+// doesn't interfere with the bottom-left bars or bottom-right ammo.
+const WAVE_PADDING_TOP_PX = 20;
+const WAVE_FONT_SIZE_PX = 22;
+
 export class Hud {
   private readonly scene: Scene;
   private readonly player: Player;
@@ -80,7 +86,10 @@ export class Hud {
   private readonly shieldFill: Rectangle;
   private readonly shieldText: TextBlock;
   private readonly ammoText: TextBlock;
+  private readonly waveText: TextBlock;
   private readonly crosshair: Image;
+
+  private waveState: WaveState | null = null;
 
   private updateObserver: Nullable<Observer<Scene>> = null;
   private disposed = false;
@@ -144,6 +153,24 @@ export class Hud {
     this.ammoText.shadowBlur = 0;
     this.texture.addControl(this.ammoText);
 
+    // ---- Wave indicator (top-center) ----
+    this.waveText = new TextBlock("hudWaveText");
+    this.waveText.text = "";
+    this.waveText.color = "#FFFFFF";
+    this.waveText.fontSize = WAVE_FONT_SIZE_PX;
+    this.waveText.fontFamily = "monospace";
+    this.waveText.textHorizontalAlignment =
+      Control.HORIZONTAL_ALIGNMENT_CENTER;
+    this.waveText.textVerticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
+    this.waveText.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
+    this.waveText.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
+    this.waveText.paddingTop = `${WAVE_PADDING_TOP_PX}px`;
+    this.waveText.shadowColor = "#000000";
+    this.waveText.shadowOffsetX = 2;
+    this.waveText.shadowOffsetY = 2;
+    this.waveText.shadowBlur = 0;
+    this.texture.addControl(this.waveText);
+
     // ---- Crosshair (centered) ----
     this.crosshair = new Image("hudCrosshair", CROSSHAIR_PATH);
     this.crosshair.width = `${CROSSHAIR_SIZE_PX}px`;
@@ -160,6 +187,40 @@ export class Hud {
     this.updateObserver = scene.onBeforeRenderObservable.add(() => {
       this.refresh();
     });
+  }
+
+  /**
+   * Update the wave indicator. Arena wires this to
+   * `WaveSpawner.onStateChange` and also calls it once with the spawner's
+   * initial state so the HUD reads correctly before the first wave fires.
+   * Pass `null` to clear the indicator.
+   */
+  setWaveState(state: WaveState | null): void {
+    if (this.disposed) return;
+    this.waveState = state;
+    this.refreshWaveText();
+  }
+
+  private refreshWaveText(): void {
+    const state = this.waveState;
+    if (!state || state.status === "idle") {
+      this.waveText.text = "";
+      return;
+    }
+    if (state.status === "active") {
+      this.waveText.text =
+        `Wave ${state.waveNumber} — ` +
+        `${state.enemiesAlive}/${state.enemiesTotal} enemies`;
+      return;
+    }
+    if (state.status === "breather") {
+      const seconds = Math.max(1, Math.ceil(state.breatherTimeRemaining));
+      this.waveText.text =
+        `Wave ${state.waveNumber + 1} incoming in ${seconds}...`;
+      return;
+    }
+    // status === "complete"
+    this.waveText.text = "All waves cleared!";
   }
 
   /**
@@ -194,6 +255,13 @@ export class Hud {
       this.ammoText.text = `-- / ${weapon.magazine}  (reloading)`;
     } else {
       this.ammoText.text = `${weapon.ammo} / ${weapon.magazine}`;
+    }
+
+    // Wave indicator — only the breather countdown changes per frame; the
+    // active "X/Y" count and complete state are pushed via setWaveState.
+    // Refreshing every frame is cheap and keeps countdown text live.
+    if (this.waveState && this.waveState.status === "breather") {
+      this.refreshWaveText();
     }
   }
 
