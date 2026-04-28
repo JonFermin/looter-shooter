@@ -40,6 +40,7 @@ import {
 } from "../systems/WaveSpawner.js";
 import { Hud } from "../ui/Hud.js";
 import { DamageNumbers } from "../ui/DamageNumbers.js";
+import { Inventory } from "../ui/Inventory.js";
 
 import {
   Archetype,
@@ -49,8 +50,10 @@ import { RarityTier, RARITY_WEIGHT } from "../data/Rarity.js";
 import {
   WEAPONS_BY_ARCHETYPE,
   pickWeaponEntry,
+  lookupWeaponEntryByMeshPath,
   type WeaponEntry,
 } from "../data/WeaponDatabase.js";
+import type { InventoryItem } from "../data/InventoryItem.js";
 import { rollWeapon } from "../systems/StatRoll.js";
 
 const ASSET_BASE = "/assets/environment";
@@ -475,7 +478,11 @@ export async function createArenaScene(
     throw new Error("Arena: WEAPONS_BY_ARCHETYPE has no RIFLE entries");
   }
   const starterStats = rollWeapon(starterArchetype, RarityTier.COMMON);
-  const weapon = await Weapon.create(
+  // `let` because Phase 7 #13's inventory equip flow re-assigns this after
+  // disposing the previous Weapon instance. The Hud + click-to-fire closures
+  // below capture the binding (not the value) so they always see the live
+  // weapon.
+  let weapon: Weapon = await Weapon.create(
     scene,
     {
       stats: starterStats,
@@ -485,6 +492,16 @@ export async function createArenaScene(
     },
     player.getRightHandTransform(),
   );
+
+  // Seed Player.equipped with the starter weapon's metadata so the
+  // inventory compare panel can read it on first open.
+  player.setEquipped({
+    stats: starterStats,
+    archetype: starterArchetype,
+    rarity: RarityTier.COMMON,
+    meshPath: starterEntry.meshPath,
+    displayName: starterEntry.displayName,
+  });
 
   // ---- enemies + mesh→Enemy registry for damage routing ----
   // The Combat raycast returns whichever picked sub-mesh got hit, but
@@ -685,9 +702,116 @@ export async function createArenaScene(
   // Kick off wave 1.
   spawner.start();
 
+  // ---- Inventory UI ----
+  // Equip + discard handlers are wired below; the inventory just bridges
+  // UI clicks back to these. Re-equipping is async (Weapon.create awaits a
+  // glTF load) so we serialize requests behind a Promise gate to avoid
+  // double-spawning a weapon if the user spams E.
+  let equipPending = false;
+
+  async function equipFromInventory(
+    item: InventoryItem,
+    indexInInventory: number,
+  ): Promise<void> {
+    if (equipPending) return;
+    equipPending = true;
+    try {
+      const removed = player.removeFromInventory(indexInInventory);
+      if (!removed) return;
+
+      const oldEquipped = player.equipped;
+
+      // Drop old weapon at player's feet so the swap reads as "trade".
+      // Anchor on ground so the loot beam sits flush.
+      if (oldEquipped) {
+        const dropPos = player.position.clone();
+        dropPos.y = 0;
+        spawnLoot(
+          scene,
+          dropPos,
+          oldEquipped.stats,
+          oldEquipped.rarity,
+          oldEquipped.meshPath,
+        );
+      }
+
+      // Tear down the old Weapon entity before building the new one so the
+      // child meshes don't briefly stack on the same hand bone.
+      weapon.dispose();
+
+      weapon = await Weapon.create(
+        scene,
+        {
+          stats: item.stats,
+          rarity: item.rarity,
+          meshPath: item.meshPath,
+          displayName: item.displayName,
+        },
+        player.getRightHandTransform(),
+      );
+
+      player.setEquipped(item);
+      inventory.refresh();
+      console.log(
+        `[Arena] equipped ${RarityTier[item.rarity]} ${Archetype[item.archetype]}`,
+        item.stats,
+      );
+    } finally {
+      equipPending = false;
+    }
+  }
+
+  function discardFromInventory(
+    item: InventoryItem,
+    indexInInventory: number,
+  ): void {
+    const removed = player.removeFromInventory(indexInInventory);
+    if (!removed) return;
+    const dropPos = player.position.clone();
+    dropPos.y = 0;
+    spawnLoot(scene, dropPos, item.stats, item.rarity, item.meshPath);
+    inventory.refresh();
+    console.log(
+      `[Arena] discarded ${RarityTier[item.rarity]} ${Archetype[item.archetype]}`,
+    );
+  }
+
+  const inventory = new Inventory(
+    scene,
+    player,
+    (item, idx) => {
+      void equipFromInventory(item, idx);
+    },
+    discardFromInventory,
+  );
+
+  // Tab toggles the panel. We intercept the keydown so the browser's
+  // default focus-shift behavior doesn't move focus off the canvas while
+  // we're in the middle of a game session. Auto-repeat is filtered with
+  // `e.repeat` so holding Tab doesn't strobe the panel open/closed.
+  const tabKeyListener = (e: KeyboardEvent): void => {
+    if (e.key !== "Tab") return;
+    e.preventDefault();
+    if (e.repeat) return;
+    inventory.toggle();
+    if (inventory.isOpen()) {
+      // Release pointer-lock so the cursor is free to click cards, and
+      // suppress Player's canvas-click handler so clicking a card doesn't
+      // drag focus back into mouse-look.
+      if (document.pointerLockElement) {
+        document.exitPointerLock();
+      }
+      player.setPointerLockSuppressed(true);
+    } else {
+      player.setPointerLockSuppressed(false);
+    }
+  };
+  window.addEventListener("keydown", tabKeyListener);
+
   // ---- E key picks up nearest drop, R key reloads ----
   let eWasDown = false;
   let rWasDown = false;
+  let xWasDown = false;
 
   // ---- per-frame tick ----
   const beforeRender = scene.onBeforeRenderObservable.add(() => {
@@ -706,19 +830,57 @@ export async function createArenaScene(
     // before this callback fires.
     player.clampToBounds(bounds);
 
-    // E keypress edge — single fire on transition from up to down.
+    // E keypress edge — single fire on transition from up to down. E has
+    // two meanings depending on inventory state: closed = pickup nearest
+    // drop, open = equip currently-selected card. We never fire both
+    // branches in the same edge.
     const eNow = input.isDown("e");
     if (eNow && !eWasDown) {
-      const drop = nearestPickup(player);
-      if (drop) {
-        console.log(
-          `[Arena] picked up ${RarityTier[drop.rarity]} weapon`,
-          drop.weapon,
-        );
-        disposeLoot(drop);
+      if (inventory.isOpen()) {
+        inventory.equipSelected();
+      } else {
+        const drop = nearestPickup(player);
+        if (drop) {
+          const entry = lookupWeaponEntryByMeshPath(drop.meshPath);
+          if (!entry) {
+            console.warn(
+              `[Arena] LootDrop mesh ${drop.meshPath} not in catalogue — cannot pick up`,
+            );
+          } else {
+            const item: InventoryItem = {
+              stats: drop.weapon,
+              archetype: entry.archetype,
+              rarity: drop.rarity,
+              meshPath: entry.meshPath,
+              displayName: entry.displayName,
+            };
+            const added = player.addToInventory(item);
+            if (added) {
+              console.log(
+                `[Arena] picked up ${RarityTier[drop.rarity]} ${Archetype[entry.archetype]}`,
+                drop.weapon,
+              );
+              disposeLoot(drop);
+              inventory.refresh();
+            } else {
+              console.warn(
+                "[Arena] inventory full — leaving loot drop in world",
+              );
+            }
+          }
+        }
       }
     }
     eWasDown = eNow;
+
+    // X keypress edge — discard the selected card while inventory is open.
+    const xNow = input.isDown("x");
+    if (xNow && !xWasDown) {
+      if (inventory.isOpen()) {
+        inventory.discardSelected();
+      }
+    }
+    xWasDown = xNow;
 
     // R keypress edge — kicks off a reload on the equipped weapon.
     const rNow = input.isDown("r");
@@ -732,6 +894,8 @@ export async function createArenaScene(
   scene.onDisposeObservable.addOnce(() => {
     scene.onBeforeRenderObservable.remove(beforeRender);
     unsubscribeFire();
+    window.removeEventListener("keydown", tabKeyListener);
+    inventory.dispose();
     spawner.dispose();
     hud.dispose();
     damageNumbers.dispose();

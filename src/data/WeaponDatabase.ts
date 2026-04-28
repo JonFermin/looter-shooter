@@ -64,6 +64,25 @@ export const WEAPONS_BY_ARCHETYPE: Record<Archetype, WeaponEntry[]> =
   buildArchetypeIndex(WEAPON_DATABASE);
 
 /**
+ * Look up a WeaponEntry by its meshPath. Used by Phase 7 #13 (inventory
+ * pickup) so a LootDrop's mesh path can be turned back into the original
+ * archetype + displayName when adding the drop to Player.inventory.
+ *
+ * Returns null if the meshPath isn't in the catalogue — callers should
+ * treat that as "the LootDrop was constructed with a custom mesh outside
+ * the WeaponDatabase" and fall back to the loot drop's stats / rarity
+ * alone.
+ */
+export function lookupWeaponEntryByMeshPath(
+  meshPath: string,
+): WeaponEntry | null {
+  for (const e of WEAPON_DATABASE) {
+    if (e.meshPath === meshPath) return e;
+  }
+  return null;
+}
+
+/**
  * Pick a single weapon entry for the given archetype. Throws if the
  * archetype has zero registered meshes (which would indicate a bad table —
  * we keep at least 3 entries per archetype above).

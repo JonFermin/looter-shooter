@@ -96,6 +96,16 @@ export class LootDrop {
     return this._rarity;
   }
 
+  /**
+   * The asset path the drop's weapon mesh streamed from. Phase 7 #13's
+   * inventory pickup uses this to look up the original WeaponEntry in the
+   * catalogue so the resulting InventoryItem carries archetype +
+   * displayName alongside the stats/rarity already on the drop.
+   */
+  get meshPath(): string {
+    return this.weaponMeshPath;
+  }
+
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;

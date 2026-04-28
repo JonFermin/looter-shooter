@@ -18,8 +18,14 @@ import type { Nullable } from "@babylonjs/core/types.js";
 import { loadGLB } from "../utils/AssetLoader.js";
 import { getDeltaSeconds } from "../utils/time.js";
 import type { Input } from "../input/Input.js";
+import type { InventoryItem } from "../data/InventoryItem.js";
 
 const PLAYER_MESH_PATH = "/assets/characters/Characters_Lis_SingleWeapon.gltf";
+
+// Hard cap on Player.inventory length. Phase 7 #13's AC asks for a 4×6 grid
+// (24 slots); enforced here so callers can't sneak past the UI by going via
+// the Player API.
+export const INVENTORY_CAPACITY = 24;
 
 const WALK_SPEED = 5; // units / second
 const RUN_SPEED = 8; // units / second (shift-held)
@@ -89,6 +95,10 @@ export class Player {
   private vy = 0;
   private grounded = true;
   private guitarHidden = false;
+  // When true the canvas click listener stops requesting pointer-lock.
+  // The Arena toggles this while the inventory panel is open so clicks on
+  // inventory cards don't drag the camera back into mouse-look mode.
+  private pointerLockSuppressed = false;
 
   // HP/respawn state. Settable spawn point so the Arena scene can position
   // the player at the courtyard center. takeDamage() clamps to 0 and triggers
@@ -109,6 +119,14 @@ export class Player {
   private readonly _shieldRegenRate = 5; // points/sec
   private readonly _shieldRegenDelay = 3; // sec out of combat before regen
   private _timeSinceLastDamage = 0;
+
+  // Inventory + equipped weapon metadata. The actual Weapon entity (mesh,
+  // ammo, fire timing) lives in the Arena scene closure — Player only owns
+  // the data side so save/load can serialize it without touching scene
+  // graphs. equipped mirrors whatever Arena currently has rendered as the
+  // hand weapon; the Arena equip-flow keeps the two in sync.
+  private _inventory: InventoryItem[] = [];
+  private _equipped: InventoryItem | null = null;
 
   // Keep references so dispose() can detach/clean up.
   private beforeRenderObserver: Nullable<Observer<Scene>> = null;
@@ -238,6 +256,58 @@ export class Player {
    */
   setSpawnPoint(p: Vector3): void {
     this._spawnPoint = p.clone();
+  }
+
+  /**
+   * Read-only view of the player's inventory (newest-first ordering is not
+   * guaranteed; UI iterates by index 0..len). Returns the live array as a
+   * readonly reference so the caller can iterate cheaply — mutations must
+   * go through addToInventory / removeFromInventory.
+   */
+  get inventory(): readonly InventoryItem[] {
+    return this._inventory;
+  }
+
+  /** Currently equipped weapon's metadata, or null if unarmed. */
+  get equipped(): InventoryItem | null {
+    return this._equipped;
+  }
+
+  /**
+   * Append an item to the inventory. Returns false (and leaves the inventory
+   * untouched) if we're already at INVENTORY_CAPACITY so the caller — Arena's
+   * E-pickup handler — can leave the loot in the world for retry.
+   */
+  addToInventory(item: InventoryItem): boolean {
+    if (this._inventory.length >= INVENTORY_CAPACITY) return false;
+    this._inventory.push(item);
+    return true;
+  }
+
+  /**
+   * Remove and return the item at `index`. Returns null if the index is
+   * out of bounds — the inventory UI delegates equip/discard through this
+   * so an invalid selection doesn't crash the click handler.
+   */
+  removeFromInventory(index: number): InventoryItem | null {
+    if (index < 0 || index >= this._inventory.length) return null;
+    const [removed] = this._inventory.splice(index, 1);
+    return removed ?? null;
+  }
+
+  /** Replace the equipped item. Pass null to clear (unarmed state). */
+  setEquipped(item: InventoryItem | null): void {
+    this._equipped = item;
+  }
+
+  /**
+   * Toggle the canvas-click pointer-lock acquisition. The Arena calls this
+   * when opening the inventory so clicking a card doesn't relock the
+   * cursor (which would yank focus away from the menu). Closing the
+   * inventory re-enables the normal click-to-lock behaviour.
+   */
+  setPointerLockSuppressed(suppress: boolean): void {
+    this.pointerLockSuppressed = suppress;
   }
 
   /**
@@ -437,6 +507,7 @@ export class Player {
 
   private setupPointerLockOnClick(): void {
     this.clickListener = () => {
+      if (this.pointerLockSuppressed) return;
       if (!document.pointerLockElement) {
         this.input.requestPointerLock(this.canvas);
       }
