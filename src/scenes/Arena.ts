@@ -55,6 +55,13 @@ import {
 } from "../data/WeaponDatabase.js";
 import type { InventoryItem } from "../data/InventoryItem.js";
 import { rollWeapon } from "../systems/StatRoll.js";
+import {
+  SAVE_SCHEMA_VERSION,
+  itemToSerialized,
+  loadSavedState,
+  saveState,
+  serializedToItem,
+} from "../persistence/SaveLoad.js";
 
 const ASSET_BASE = "/assets/environment";
 
@@ -470,14 +477,36 @@ export async function createArenaScene(
   player.rootMesh.position.copyFrom(spawnPoint);
   player.hideGuitarMesh();
 
-  // Starter weapon — a COMMON rifle from the Quaternius pack. We pick a
-  // specific entry rather than randomising so first-load is reproducible.
-  const starterArchetype = Archetype.RIFLE;
-  const starterEntry = WEAPONS_BY_ARCHETYPE[starterArchetype][0];
-  if (!starterEntry) {
-    throw new Error("Arena: WEAPONS_BY_ARCHETYPE has no RIFLE entries");
+  // Starter weapon — saved state takes precedence so reloads restore the
+  // exact equipped weapon (archetype, mesh, rolled stats, rarity). On a
+  // fresh game we fall through to the deterministic COMMON rifle path so
+  // first-load is reproducible.
+  const saved = loadSavedState();
+
+  let starterArchetype: Archetype;
+  let starterMeshPath: string;
+  let starterDisplayName: string;
+  let starterStats: WeaponStats;
+  let starterRarity: RarityTier;
+
+  if (saved && saved.equipped) {
+    starterArchetype = saved.equipped.archetype;
+    starterMeshPath = saved.equipped.meshPath;
+    starterDisplayName = saved.equipped.displayName;
+    starterStats = saved.equipped.stats;
+    starterRarity = saved.equipped.rarity;
+  } else {
+    starterArchetype = Archetype.RIFLE;
+    const starterEntry = WEAPONS_BY_ARCHETYPE[starterArchetype][0];
+    if (!starterEntry) {
+      throw new Error("Arena: WEAPONS_BY_ARCHETYPE has no RIFLE entries");
+    }
+    starterMeshPath = starterEntry.meshPath;
+    starterDisplayName = starterEntry.displayName;
+    starterStats = rollWeapon(starterArchetype, RarityTier.COMMON);
+    starterRarity = RarityTier.COMMON;
   }
-  const starterStats = rollWeapon(starterArchetype, RarityTier.COMMON);
+
   // `let` because Phase 7 #13's inventory equip flow re-assigns this after
   // disposing the previous Weapon instance. The Hud + click-to-fire closures
   // below capture the binding (not the value) so they always see the live
@@ -486,22 +515,47 @@ export async function createArenaScene(
     scene,
     {
       stats: starterStats,
-      rarity: RarityTier.COMMON,
-      meshPath: starterEntry.meshPath,
-      displayName: starterEntry.displayName,
+      rarity: starterRarity,
+      meshPath: starterMeshPath,
+      displayName: starterDisplayName,
     },
     player.getRightHandTransform(),
   );
 
-  // Seed Player.equipped with the starter weapon's metadata so the
-  // inventory compare panel can read it on first open.
-  player.setEquipped({
-    stats: starterStats,
-    archetype: starterArchetype,
-    rarity: RarityTier.COMMON,
-    meshPath: starterEntry.meshPath,
-    displayName: starterEntry.displayName,
-  });
+  if (saved) {
+    // Restore inventory + currency + kills wholesale. setSavedState also
+    // reseats `equipped`, so we don't double-set it below.
+    player.setSavedState({
+      inventory: saved.inventory.map(serializedToItem),
+      equipped: saved.equipped ? serializedToItem(saved.equipped) : null,
+      currency: saved.currency,
+      totalKills: saved.totalKills,
+    });
+  } else {
+    // Seed Player.equipped with the starter weapon's metadata so the
+    // inventory compare panel can read it on first open.
+    player.setEquipped({
+      stats: starterStats,
+      archetype: starterArchetype,
+      rarity: starterRarity,
+      meshPath: starterMeshPath,
+      displayName: starterDisplayName,
+    });
+  }
+
+  // Single source of truth for "save current loadout to localStorage".
+  // Called after every discrete state mutation that affects what the
+  // saved state should be — never per-frame.
+  function persist(): void {
+    const equipped = player.equipped;
+    saveState({
+      schemaVersion: SAVE_SCHEMA_VERSION,
+      equipped: equipped ? itemToSerialized(equipped) : null,
+      inventory: player.inventory.map(itemToSerialized),
+      currency: player.currency,
+      totalKills: player.totalKills,
+    });
+  }
 
   // ---- enemies + mesh→Enemy registry for damage routing ----
   // The Combat raycast returns whichever picked sub-mesh got hit, but
@@ -583,6 +637,12 @@ export async function createArenaScene(
       }
       spawner.notifyEnemyDeath(dead);
       handleEnemyDeath(dead);
+      // Award progression on every confirmed death. UFOs are the rarer +
+      // tougher enemy so they pay 5x what a zombie does. Numbers are
+      // placeholders pending Phase 9's economy pass.
+      player.addKill();
+      player.addCurrency(dead.type === "ufo" ? 25 : 5);
+      persist();
       // We deliberately leave `dead` in the `enemies` array — Enemy.update
       // still needs to drive the death sink-and-fade tween for ~800ms,
       // and Enemy.update internally noops once the tween disposes itself.
@@ -752,6 +812,7 @@ export async function createArenaScene(
 
       player.setEquipped(item);
       inventory.refresh();
+      persist();
       console.log(
         `[Arena] equipped ${RarityTier[item.rarity]} ${Archetype[item.archetype]}`,
         item.stats,
@@ -771,6 +832,7 @@ export async function createArenaScene(
     dropPos.y = 0;
     spawnLoot(scene, dropPos, item.stats, item.rarity, item.meshPath);
     inventory.refresh();
+    persist();
     console.log(
       `[Arena] discarded ${RarityTier[item.rarity]} ${Archetype[item.archetype]}`,
     );
@@ -862,6 +924,7 @@ export async function createArenaScene(
               );
               disposeLoot(drop);
               inventory.refresh();
+              persist();
             } else {
               console.warn(
                 "[Arena] inventory full — leaving loot drop in world",

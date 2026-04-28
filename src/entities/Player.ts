@@ -128,6 +128,12 @@ export class Player {
   private _inventory: InventoryItem[] = [];
   private _equipped: InventoryItem | null = null;
 
+  // Persisted across sessions via SaveLoad. Currency is a tracked counter
+  // only in v1 (no spending UI yet); kills feed the future death-screen
+  // summary and any "kills until next wave" HUD work.
+  private _currency = 0;
+  private _totalKills = 0;
+
   // Keep references so dispose() can detach/clean up.
   private beforeRenderObserver: Nullable<Observer<Scene>> = null;
   private clickListener?: () => void;
@@ -298,6 +304,50 @@ export class Player {
   /** Replace the equipped item. Pass null to clear (unarmed state). */
   setEquipped(item: InventoryItem | null): void {
     this._equipped = item;
+  }
+
+  /** Currency the player has accumulated across the session (and saves). */
+  get currency(): number {
+    return this._currency;
+  }
+
+  /** Lifetime kill counter. Persisted across reloads. */
+  get totalKills(): number {
+    return this._totalKills;
+  }
+
+  /**
+   * Award currency to the player. Negative or zero amounts are no-ops so
+   * callers (loot, quests) don't have to guard. There's no cap yet — Phase
+   * 9's economy work will own balancing.
+   */
+  addCurrency(amount: number): void {
+    if (amount <= 0) return;
+    this._currency += amount;
+  }
+
+  /** Increment the lifetime kill counter by one. Called from Arena's enemy.onDeath. */
+  addKill(): void {
+    this._totalKills += 1;
+  }
+
+  /**
+   * Restore persisted state. Replaces inventory, equipped, currency, and
+   * totalKills wholesale. Does NOT touch HP/shield (those reset to max on
+   * load via the existing init path). Called once during scene setup,
+   * after init() but before the first frame, so the Player is fully
+   * constructed when the data lands.
+   */
+  setSavedState(state: {
+    inventory: InventoryItem[];
+    equipped: InventoryItem | null;
+    currency: number;
+    totalKills: number;
+  }): void {
+    this._inventory = [...state.inventory];
+    this._equipped = state.equipped;
+    this._currency = state.currency;
+    this._totalKills = state.totalKills;
   }
 
   /**
