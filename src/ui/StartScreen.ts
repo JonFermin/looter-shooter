@@ -18,19 +18,32 @@ import { Rectangle } from "@babylonjs/gui/2D/controls/rectangle.js";
 import { TextBlock } from "@babylonjs/gui/2D/controls/textBlock.js";
 import { Control } from "@babylonjs/gui/2D/controls/control.js";
 
+import { loadSkipIntro, saveSkipIntro } from "../persistence/SaveLoad.js";
+
 const BACKDROP_COLOR = "#000000aa";
 const TITLE_COLOR = "#ffffff";
 const PROMPT_COLOR = "#cccccc";
 const HINT_COLOR = "#9aa3b2";
 
 export class StartScreen {
-  private readonly texture: AdvancedDynamicTexture;
+  private texture: AdvancedDynamicTexture | null = null;
   private readonly onStart: () => void;
   private keyListener: ((e: KeyboardEvent) => void) | null = null;
   private disposed = false;
 
   constructor(scene: Scene, onStart: () => void) {
     this.onStart = onStart;
+
+    // Skip-intro path: returning users have already seen the title once;
+    // fire onStart immediately and never mount the GUI overlay so the
+    // arena renders without a one-frame backdrop flash.
+    if (loadSkipIntro()) {
+      this.disposed = true;
+      saveSkipIntro();
+      this.onStart();
+      return;
+    }
+
     this.texture = AdvancedDynamicTexture.CreateFullscreenUI(
       "startScreen",
       true,
@@ -91,6 +104,7 @@ export class StartScreen {
       if (this.disposed) return;
       if (e.repeat) return;
       e.preventDefault();
+      saveSkipIntro();
       this.onStart();
       this.dispose();
     };
@@ -104,6 +118,9 @@ export class StartScreen {
       window.removeEventListener("keydown", this.keyListener);
       this.keyListener = null;
     }
-    this.texture.dispose();
+    if (this.texture) {
+      this.texture.dispose();
+      this.texture = null;
+    }
   }
 }

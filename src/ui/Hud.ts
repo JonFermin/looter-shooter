@@ -78,8 +78,11 @@ const WAVE_FONT_SIZE_PX = 22;
 // pulses to alpha=1 on a confirmed enemy hit and decays to 0 over
 // CROSSHAIR_FLASH_MS. Sized to match the crosshair so the flash reads as
 // "the crosshair lit up" rather than "a separate sprite appeared".
+// Lethal hits swap to the kill color so the player gets visual confirmation
+// that the shot finished the enemy off.
 const CROSSHAIR_FLASH_MS = 120;
 const CROSSHAIR_FLASH_COLOR = "#ffffff";
+const CROSSHAIR_KILL_FLASH_COLOR = "#ff3a3a";
 
 export class Hud {
   private readonly scene: Scene;
@@ -214,8 +217,11 @@ export class Hud {
       this.refresh();
     });
 
-    this.hitObserver = onHit.add(() => {
+    this.hitObserver = onHit.add((event) => {
       this.crosshairFlashRemainingMs = CROSSHAIR_FLASH_MS;
+      this.crosshairFlash.background = event.lethal
+        ? CROSSHAIR_KILL_FLASH_COLOR
+        : CROSSHAIR_FLASH_COLOR;
     });
   }
 

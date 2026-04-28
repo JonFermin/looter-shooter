@@ -31,6 +31,8 @@ export interface Hit {
 export interface HitEvent extends Hit {
   /** Damage applied for this hit (read from weapon.stats.damage by caller). */
   damage: number;
+  /** True iff this hit was the killing blow on the target enemy. */
+  lethal: boolean;
 }
 
 /**

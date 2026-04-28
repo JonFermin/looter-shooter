@@ -36,6 +36,14 @@ import { RARITY_COLOR } from "../data/Rarity.js";
 
 // Outer minimap diameter in pixels (the visible circle).
 const MINIMAP_SIZE_PX = 180;
+// Outer frame ring sits this many pixels OUTSIDE the disc on each side, so
+// the ring's overall diameter is MINIMAP_SIZE_PX + RING_GAP_PX * 2.
+const RING_GAP_PX = 6;
+const RING_THICKNESS_PX = 4;
+// Tick label offset from the disc edge — positions the N/E/S/W glyphs just
+// outside the disc, on the ring band.
+const TICK_OFFSET_PX = MINIMAP_SIZE_PX / 2 + RING_GAP_PX - 4;
+const TICK_FONT_SIZE_PX = 10;
 // Padding from the top-right corner of the canvas.
 const MINIMAP_PADDING_TOP_PX = 24;
 const MINIMAP_PADDING_RIGHT_PX = 24;
@@ -97,6 +105,10 @@ export class Minimap {
       scene,
     );
 
+    // Frame ring goes on the texture BEFORE the disc so it renders below
+    // the disc + dots, reading as a "bezel" surrounding the map.
+    this.createRing();
+
     this.disc = this.createDisc();
     this.texture.addControl(this.disc);
 
@@ -104,6 +116,7 @@ export class Minimap {
     this.disc.addControl(this.playerArrow);
 
     this.createCompass();
+    this.createTickLabels();
 
     this.refresh();
 
@@ -157,6 +170,56 @@ export class Minimap {
     arrow.textHorizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
     arrow.textVerticalAlignment = Control.VERTICAL_ALIGNMENT_CENTER;
     return arrow;
+  }
+
+  private createRing(): void {
+    const ring = new Ellipse("minimapRing");
+    ring.width = `${MINIMAP_SIZE_PX + RING_GAP_PX * 2}px`;
+    ring.height = `${MINIMAP_SIZE_PX + RING_GAP_PX * 2}px`;
+    ring.thickness = RING_THICKNESS_PX;
+    ring.color = "#ffffff";
+    ring.background = "transparent";
+    ring.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_RIGHT;
+    ring.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
+    // Ring shares the disc's anchor + padding minus RING_GAP_PX so the
+    // disc lands concentric inside the ring.
+    ring.paddingTop = `${MINIMAP_PADDING_TOP_PX - RING_GAP_PX}px`;
+    ring.paddingRight = `${MINIMAP_PADDING_RIGHT_PX - RING_GAP_PX}px`;
+    this.texture.addControl(ring);
+  }
+
+  private createTickLabels(): void {
+    // Cardinal labels share the disc's top-right anchor + padding, then
+    // each gets a `top`/`left` offset that pushes it just outside the disc
+    // edge in the matching cardinal direction. Top is anchored at the
+    // disc's top-center, etc., so we offset from THERE rather than the
+    // canvas corner.
+    this.addTickLabel("N", 0, -TICK_OFFSET_PX);
+    this.addTickLabel("S", 0, TICK_OFFSET_PX);
+    this.addTickLabel("E", TICK_OFFSET_PX, 0);
+    this.addTickLabel("W", -TICK_OFFSET_PX, 0);
+  }
+
+  private addTickLabel(text: string, dx: number, dy: number): void {
+    const label = new TextBlock(`minimapTick_${text}`, text);
+    label.color = "#ffffff";
+    label.fontSize = TICK_FONT_SIZE_PX;
+    label.fontFamily = "monospace";
+    label.width = `${TICK_FONT_SIZE_PX * 2}px`;
+    label.height = `${TICK_FONT_SIZE_PX * 2}px`;
+    label.shadowColor = "#000000";
+    label.shadowOffsetX = 1;
+    label.shadowOffsetY = 1;
+    label.shadowBlur = 0;
+    label.textHorizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
+    label.textVerticalAlignment = Control.VERTICAL_ALIGNMENT_CENTER;
+    // Adding to the disc means dx=0/dy=0 sits at the disc's center; the
+    // cardinal offsets push the labels onto the ring band just outside.
+    label.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
+    label.verticalAlignment = Control.VERTICAL_ALIGNMENT_CENTER;
+    label.left = `${dx}px`;
+    label.top = `${dy}px`;
+    this.disc.addControl(label);
   }
 
   private createCompass(): void {

@@ -549,8 +549,10 @@ export async function createArenaScene(
 
   // Single source of truth for "save current loadout to localStorage".
   // Called after every discrete state mutation that affects what the
-  // saved state should be — never per-frame.
-  function persist(): void {
+  // saved state should be — never per-frame. Debounced 300ms so a burst
+  // of pickups + kills coalesces into a single localStorage write.
+  let persistTimerId: number | null = null;
+  function persistNow(): void {
     const equipped = player.equipped;
     saveState({
       schemaVersion: SAVE_SCHEMA_VERSION,
@@ -559,6 +561,15 @@ export async function createArenaScene(
       currency: player.currency,
       totalKills: player.totalKills,
     });
+  }
+  function persist(): void {
+    if (persistTimerId !== null) {
+      window.clearTimeout(persistTimerId);
+    }
+    persistTimerId = window.setTimeout(() => {
+      persistTimerId = null;
+      persistNow();
+    }, 300);
   }
 
   // ---- enemies + mesh→Enemy registry for damage routing ----
@@ -743,6 +754,7 @@ export async function createArenaScene(
         mesh: hit.mesh,
         distance: hit.distance,
         damage,
+        lethal: target.isDead,
       });
     }
   });
@@ -1001,6 +1013,13 @@ export async function createArenaScene(
 
   // ---- teardown ----
   scene.onDisposeObservable.addOnce(() => {
+    // Flush any pending debounced persist so closing the tab / HMR reload
+    // mid-burst doesn't drop the latest save.
+    if (persistTimerId !== null) {
+      window.clearTimeout(persistTimerId);
+      persistTimerId = null;
+      persistNow();
+    }
     scene.onBeforeRenderObservable.remove(beforeRender);
     unsubscribeFire();
     window.removeEventListener("keydown", tabKeyListener);

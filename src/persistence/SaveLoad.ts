@@ -13,6 +13,24 @@ import type { InventoryItem } from "../data/InventoryItem.js";
 export const SAVE_KEY = "looter-shooter:save:v1";
 export const SAVE_SCHEMA_VERSION = 1;
 
+export const SKIP_INTRO_KEY = "looter-shooter:skip-intro:v1";
+
+export function loadSkipIntro(): boolean {
+  try {
+    return localStorage.getItem(SKIP_INTRO_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+export function saveSkipIntro(): void {
+  try {
+    localStorage.setItem(SKIP_INTRO_KEY, "1");
+  } catch (err) {
+    console.warn("[SaveLoad] failed to set skip-intro flag:", err);
+  }
+}
+
 export interface SerializedItem {
   archetype: Archetype;
   rarity: RarityTier;
