@@ -74,6 +74,14 @@ const AMMO_PADDING_BOTTOM_PX = 24;
 const WAVE_PADDING_TOP_PX = 20;
 const WAVE_FONT_SIZE_PX = 22;
 
+// Currency readout — top-left, padded 24px from the left edge so it sits
+// just inside the viewport without colliding with the wave indicator
+// (top-center) or minimap (top-right).
+const CURRENCY_PADDING_TOP_PX = 20;
+const CURRENCY_PADDING_LEFT_PX = 24;
+const CURRENCY_FONT_SIZE_PX = 18;
+const CURRENCY_COLOR = "#ffe066";
+
 // Crosshair hit flash — a white square overlaid on the crosshair that
 // pulses to alpha=1 on a confirmed enemy hit and decays to 0 over
 // CROSSHAIR_FLASH_MS. Sized to match the crosshair so the flash reads as
@@ -98,6 +106,7 @@ export class Hud {
   private readonly shieldText: TextBlock;
   private readonly ammoText: TextBlock;
   private readonly waveText: TextBlock;
+  private readonly currencyText: TextBlock;
   private readonly crosshair: Image;
   private readonly crosshairFlash: Rectangle;
 
@@ -184,6 +193,26 @@ export class Hud {
     this.waveText.shadowOffsetY = 2;
     this.waveText.shadowBlur = 0;
     this.texture.addControl(this.waveText);
+
+    // ---- Currency readout (top-left) ----
+    this.currencyText = new TextBlock("hudCurrencyText");
+    this.currencyText.text = "$ 0";
+    this.currencyText.color = CURRENCY_COLOR;
+    this.currencyText.fontSize = CURRENCY_FONT_SIZE_PX;
+    this.currencyText.fontFamily = "monospace";
+    this.currencyText.fontStyle = "bold";
+    this.currencyText.textHorizontalAlignment =
+      Control.HORIZONTAL_ALIGNMENT_LEFT;
+    this.currencyText.textVerticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
+    this.currencyText.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
+    this.currencyText.verticalAlignment = Control.VERTICAL_ALIGNMENT_TOP;
+    this.currencyText.paddingLeft = `${CURRENCY_PADDING_LEFT_PX}px`;
+    this.currencyText.paddingTop = `${CURRENCY_PADDING_TOP_PX}px`;
+    this.currencyText.shadowColor = "#000000";
+    this.currencyText.shadowOffsetX = 2;
+    this.currencyText.shadowOffsetY = 2;
+    this.currencyText.shadowBlur = 0;
+    this.texture.addControl(this.currencyText);
 
     // ---- Crosshair (centered) ----
     this.crosshair = new Image("hudCrosshair", CROSSHAIR_PATH);
@@ -299,6 +328,10 @@ export class Hud {
     if (this.waveState && this.waveState.status === "breather") {
       this.refreshWaveText();
     }
+
+    // Currency readout — pull from the player every frame. Cheap; GUI only
+    // re-uploads texture pixels when text actually changes.
+    this.currencyText.text = `$ ${this.player.currency}`;
 
     // Crosshair flash decay. Engine delta is in milliseconds, matching
     // CROSSHAIR_FLASH_MS so we can subtract directly without unit conversion.

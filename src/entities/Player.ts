@@ -347,6 +347,19 @@ export class Player {
     this._currency += amount;
   }
 
+  /**
+   * Attempt to spend currency. Returns true and decrements on success,
+   * returns false and leaves the balance untouched if the player can't
+   * afford it. Single source of truth so Shop UI can't desync the balance
+   * by mutating directly.
+   */
+  spendCurrency(amount: number): boolean {
+    if (amount <= 0) return true;
+    if (this._currency < amount) return false;
+    this._currency -= amount;
+    return true;
+  }
+
   /** Increment the lifetime kill counter by one. Called from Arena's enemy.onDeath. */
   addKill(): void {
     this._totalKills += 1;

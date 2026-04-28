@@ -45,6 +45,7 @@ import { Inventory } from "../ui/Inventory.js";
 import { StartScreen } from "../ui/StartScreen.js";
 import { DeathScreen } from "../ui/DeathScreen.js";
 import { Minimap } from "../ui/Minimap.js";
+import { Shop } from "../ui/Shop.js";
 
 import {
   Archetype,
@@ -923,6 +924,34 @@ export async function createArenaScene(
     discardFromInventory,
   );
 
+  // Shop overlay — opens automatically during the breather phase between
+  // waves and offers four randomly-rolled weapons priced by rarity. Currency
+  // subtraction is owned by Shop via Player.spendCurrency; this callback
+  // only adds to inventory and persists. If inventory is full Shop refunds
+  // the purchase price internally.
+  const shop = new Shop({
+    scene,
+    player,
+    onPurchase: (item) => {
+      const added = player.addToInventory(item);
+      if (!added) return "inventory-full";
+      inventory.refresh();
+      persist();
+      console.log(
+        `[Arena] purchased ${RarityTier[item.rarity]} ${Archetype[item.archetype]}`,
+        item.stats,
+      );
+      return "ok";
+    },
+  });
+  spawner.onStateChange.add((state) => {
+    if (state.status === "breather") {
+      shop.open();
+    } else {
+      shop.close();
+    }
+  });
+
   // Tab toggles the panel. We intercept the keydown so the browser's
   // default focus-shift behavior doesn't move focus off the canvas while
   // we're in the middle of a game session. Auto-repeat is filtered with
@@ -1045,6 +1074,7 @@ export async function createArenaScene(
     startScreen.dispose();
     deathScreen?.dispose();
     inventory.dispose();
+    shop.dispose();
     spawner.dispose();
     hud.dispose();
     minimap.dispose();
