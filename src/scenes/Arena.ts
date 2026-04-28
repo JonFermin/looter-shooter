@@ -33,12 +33,13 @@ import {
   nearestPickup,
   dispose as disposeLoot,
 } from "../systems/LootSystem.js";
-import { fire as combatFire } from "../systems/Combat.js";
+import { fire as combatFire, notifyHit } from "../systems/Combat.js";
 import {
   WaveSpawner,
   type SpawnUnit,
 } from "../systems/WaveSpawner.js";
 import { Hud } from "../ui/Hud.js";
+import { DamageNumbers } from "../ui/DamageNumbers.js";
 
 import {
   Archetype,
@@ -654,7 +655,14 @@ export async function createArenaScene(
     if (!hit) return;
     const target = enemyByMesh.get(hit.mesh);
     if (target) {
-      target.takeDamage(weapon.stats.damage);
+      const damage = weapon.stats.damage;
+      target.takeDamage(damage);
+      notifyHit({
+        point: hit.point,
+        mesh: hit.mesh,
+        distance: hit.distance,
+        damage,
+      });
     }
   });
 
@@ -663,6 +671,11 @@ export async function createArenaScene(
   // We thread the weapon through a closure so future weapon swaps (Phase 7
   // pickup-to-equip) just need to point this getter at the new instance.
   const hud = new Hud(scene, player, () => weapon);
+
+  // Damage numbers are observable-driven off Combat.onHit; constructing
+  // here is enough to subscribe. Lifecycle is owned by the dispose chain
+  // below.
+  const damageNumbers = new DamageNumbers(scene);
 
   // Wire the wave indicator. setWaveState is called once eagerly so the
   // "idle" → "active" transition can't beat the HUD to the first frame.
@@ -721,6 +734,7 @@ export async function createArenaScene(
     unsubscribeFire();
     spawner.dispose();
     hud.dispose();
+    damageNumbers.dispose();
     for (const e of enemies) e.dispose();
     weapon.dispose();
     player.dispose();

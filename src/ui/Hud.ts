@@ -34,6 +34,7 @@ import { Control } from "@babylonjs/gui/2D/controls/control.js";
 import type { Player } from "../entities/Player.js";
 import type { Weapon } from "../entities/Weapon.js";
 import type { WaveState } from "../systems/WaveSpawner.js";
+import { onHit, type HitEvent } from "../systems/Combat.js";
 
 // Crosshair PNG: Kenney crosshair-pack #007 (clean broken-plus, white).
 // Picked by inspecting the preview sheet; reads cleanly against both the
@@ -73,6 +74,13 @@ const AMMO_PADDING_BOTTOM_PX = 24;
 const WAVE_PADDING_TOP_PX = 20;
 const WAVE_FONT_SIZE_PX = 22;
 
+// Crosshair hit flash — a white square overlaid on the crosshair that
+// pulses to alpha=1 on a confirmed enemy hit and decays to 0 over
+// CROSSHAIR_FLASH_MS. Sized to match the crosshair so the flash reads as
+// "the crosshair lit up" rather than "a separate sprite appeared".
+const CROSSHAIR_FLASH_MS = 120;
+const CROSSHAIR_FLASH_COLOR = "#ffffff";
+
 export class Hud {
   private readonly scene: Scene;
   private readonly player: Player;
@@ -88,10 +96,13 @@ export class Hud {
   private readonly ammoText: TextBlock;
   private readonly waveText: TextBlock;
   private readonly crosshair: Image;
+  private readonly crosshairFlash: Rectangle;
 
   private waveState: WaveState | null = null;
+  private crosshairFlashRemainingMs = 0;
 
   private updateObserver: Nullable<Observer<Scene>> = null;
+  private hitObserver: Nullable<Observer<HitEvent>> = null;
   private disposed = false;
 
   constructor(
@@ -180,12 +191,31 @@ export class Hud {
     this.crosshair.stretch = Image.STRETCH_UNIFORM;
     this.texture.addControl(this.crosshair);
 
+    // Crosshair hit-flash overlay — a white rect centered on the
+    // crosshair, alpha=0 by default. Combat.onHit drives a brief flash by
+    // setting crosshairFlashRemainingMs > 0; refresh() decays it back to 0
+    // each frame using the engine's getDeltaTime().
+    this.crosshairFlash = new Rectangle("hudCrosshairFlash");
+    this.crosshairFlash.width = `${CROSSHAIR_SIZE_PX}px`;
+    this.crosshairFlash.height = `${CROSSHAIR_SIZE_PX}px`;
+    this.crosshairFlash.thickness = 0;
+    this.crosshairFlash.background = CROSSHAIR_FLASH_COLOR;
+    this.crosshairFlash.horizontalAlignment =
+      Control.HORIZONTAL_ALIGNMENT_CENTER;
+    this.crosshairFlash.verticalAlignment = Control.VERTICAL_ALIGNMENT_CENTER;
+    this.crosshairFlash.alpha = 0;
+    this.texture.addControl(this.crosshairFlash);
+
     // Initial sync so the HUD reads correctly on the very first rendered
     // frame, before onBeforeRender has fired even once.
     this.refresh();
 
     this.updateObserver = scene.onBeforeRenderObservable.add(() => {
       this.refresh();
+    });
+
+    this.hitObserver = onHit.add(() => {
+      this.crosshairFlashRemainingMs = CROSSHAIR_FLASH_MS;
     });
   }
 
@@ -263,6 +293,18 @@ export class Hud {
     if (this.waveState && this.waveState.status === "breather") {
       this.refreshWaveText();
     }
+
+    // Crosshair flash decay. Engine delta is in milliseconds, matching
+    // CROSSHAIR_FLASH_MS so we can subtract directly without unit conversion.
+    if (this.crosshairFlashRemainingMs > 0) {
+      const dtMs = this.scene.getEngine().getDeltaTime();
+      this.crosshairFlashRemainingMs -= dtMs;
+      if (this.crosshairFlashRemainingMs < 0) this.crosshairFlashRemainingMs = 0;
+      this.crosshairFlash.alpha =
+        this.crosshairFlashRemainingMs / CROSSHAIR_FLASH_MS;
+    } else if (this.crosshairFlash.alpha !== 0) {
+      this.crosshairFlash.alpha = 0;
+    }
   }
 
   dispose(): void {
@@ -271,6 +313,10 @@ export class Hud {
     if (this.updateObserver) {
       this.scene.onBeforeRenderObservable.remove(this.updateObserver);
       this.updateObserver = null;
+    }
+    if (this.hitObserver) {
+      onHit.remove(this.hitObserver);
+      this.hitObserver = null;
     }
     // Disposing the ADT removes every child control + its native texture.
     this.texture.dispose();

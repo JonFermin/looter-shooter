@@ -15,6 +15,7 @@ import { Ray } from "@babylonjs/core/Culling/ray.js";
 import type { Scene } from "@babylonjs/core/scene.js";
 import type { AbstractMesh } from "@babylonjs/core/Meshes/abstractMesh.js";
 import { Vector3 } from "@babylonjs/core/Maths/math.vector.js";
+import { Observable } from "@babylonjs/core/Misc/observable.js";
 
 import type { Weapon } from "../entities/Weapon.js";
 
@@ -25,6 +26,24 @@ export interface Hit {
   mesh: AbstractMesh;
   /** Distance from camera origin to hit point. */
   distance: number;
+}
+
+export interface HitEvent extends Hit {
+  /** Damage applied for this hit (read from weapon.stats.damage by caller). */
+  damage: number;
+}
+
+/**
+ * Manual notification channel for confirmed enemy hits. Combat.fire does
+ * NOT auto-emit — Combat doesn't know which meshes are enemies vs.
+ * environment. Arena owns the enemy registry and calls `notifyHit` after
+ * resolving the picked mesh to an Enemy, so subscribers (DamageNumbers,
+ * HUD crosshair flash) only react to enemy hits.
+ */
+export const onHit: Observable<HitEvent> = new Observable<HitEvent>();
+
+export function notifyHit(event: HitEvent): void {
+  onHit.notifyObservers(event);
 }
 
 const MAX_RANGE = 100;
