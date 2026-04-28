@@ -34,11 +34,12 @@ export function spawnLoot(
 
 /**
  * Returns the closest LootDrop within PICKUP_RADIUS of the player on the
- * XZ plane, or null if none are in range.
+ * XZ plane, or null if none are in range. Reads `player.position` directly
+ * — the Phase-3 shim that looked up "playerRoot" by mesh name is gone now
+ * that Player exposes a public position getter.
  */
 export function nearestPickup(player: Player): LootDrop | null {
-  const playerPos = readPlayerPosition(player);
-  if (!playerPos) return null;
+  const playerPos = player.position;
   let best: LootDrop | null = null;
   let bestDist = PICKUP_RADIUS;
   for (const drop of activeDrops) {
@@ -68,16 +69,4 @@ export function getActiveDrops(): LootDrop[] {
 /** Total active drop count — useful for HUD/debug overlays. */
 export function activeCount(): number {
   return activeDrops.size;
-}
-
-// Player keeps its root mesh private; we read the canonical position via
-// the scene mesh named "playerRoot" (see Player.setupCamera which marks
-// that mesh as the FollowCamera lockedTarget). This avoids modifying
-// Player to expose a getter.
-function readPlayerPosition(player: Player): Vector3 | null {
-  const sceneOf = (player as unknown as { scene?: Scene }).scene;
-  if (!sceneOf) return null;
-  const found = sceneOf.getMeshByName("playerRoot");
-  if (!found) return null;
-  return found.position;
 }

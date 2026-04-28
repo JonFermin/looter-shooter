@@ -64,10 +64,13 @@ const YAW_TURN_RATE = 6;
 
 /**
  * Per-target signal payload. Held outside the class so we don't allocate a
- * fresh object every attack frame.
+ * fresh object every attack frame. `damage` is the per-swing damage amount
+ * the receiver should apply (the Arena scene wires this into
+ * `player.takeDamage(evt.damage)`).
  */
 export interface EnemyAttackEvent {
   enemy: Enemy;
+  damage: number;
 }
 
 export class Enemy {
@@ -195,6 +198,22 @@ export class Enemy {
   /** World position of the enemy root. Read-only by convention. */
   get position(): Vector3 {
     return this.root.position;
+  }
+
+  /**
+   * Public accessor for the outer anchor TransformNode. The Arena scene's
+   * mesh→Enemy registry walks this node's child meshes once on spawn so a
+   * Combat raycast that picks any sub-mesh of the rigged glTF can resolve
+   * back to the owning Enemy instance.
+   */
+  get rootNode(): TransformNode {
+    return this.root;
+  }
+
+  /** Snapshot of every AbstractMesh under this enemy. Used by the Arena
+   *  scene to populate its mesh→Enemy lookup for damage routing. */
+  getMeshes(): AbstractMesh[] {
+    return this.meshes.slice();
   }
 
   get state(): EnemyState {
@@ -354,7 +373,10 @@ export class Enemy {
       this.faceTowards(dx, dz, dt);
       if (this.timeSinceAttack >= this.opts.attackCooldown) {
         this.timeSinceAttack = 0;
-        this.onAttack.notifyObservers({ enemy: this });
+        this.onAttack.notifyObservers({
+          enemy: this,
+          damage: this.opts.damage,
+        });
       }
     }
   }
