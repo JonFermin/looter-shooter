@@ -87,7 +87,7 @@ Key files: `src/ui/Inventory.ts` (NEW), `src/ui/DamageNumbers.ts` (NEW), `src/da
 
 ## Phase 8 — Persistence + Polish — MILESTONE: vertical slice playable end-to-end
 
-- TODO [P0] [M] #15: Save / load loadout to `localStorage` — equipped weapon + inventory + currency + total kills — restore on page load — depends: #13 — scope: `src/persistence/SaveLoad.ts`, `src/entities/Player.ts`
+- IN PROGRESS [P0] [M] #15: Save / load loadout to `localStorage` — equipped weapon + inventory + currency + total kills — restore on page load — depends: #13 ✓ — scope: `src/persistence/SaveLoad.ts`, `src/entities/Player.ts`
   AC: `build` exits 0; `lint` exits 0; `dev` — equipping a weapon and reloading the page restores the same equipped weapon (same archetype, same rolled stats, same rarity) and full inventory; kill counter and currency persist across reloads; the save key is namespaced (`looter-shooter:save:v1`); clearing `localStorage` resets to defaults; schema version field present so v2 saves can migrate
 
 - TODO [P1] [M] #16: Minimap — top-down second-camera render to GUI texture, framed by `kenney/2d/minimap-pack` — depends: #5 ✓, #8 ✓ — scope: `src/ui/Minimap.ts`
