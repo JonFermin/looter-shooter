@@ -44,6 +44,7 @@ import { DamageNumbers } from "../ui/DamageNumbers.js";
 import { Inventory } from "../ui/Inventory.js";
 import { StartScreen } from "../ui/StartScreen.js";
 import { DeathScreen } from "../ui/DeathScreen.js";
+import { Minimap } from "../ui/Minimap.js";
 
 import {
   Archetype,
@@ -757,6 +758,11 @@ export async function createArenaScene(
   // below.
   const damageNumbers = new DamageNumbers(scene);
 
+  // Minimap reads enemies + loot drops every frame and projects them onto
+  // a circular GUI overlay top-right. Constructed after the HUD so the
+  // ADT z-order naturally lands the minimap above the HUD bars.
+  const minimap = new Minimap(scene, player, () => enemies, bounds);
+
   // Wire the wave indicator. setWaveState is called once eagerly so the
   // "idle" → "active" transition can't beat the HUD to the first frame.
   hud.setWaveState(spawner.state);
@@ -1003,6 +1009,7 @@ export async function createArenaScene(
     inventory.dispose();
     spawner.dispose();
     hud.dispose();
+    minimap.dispose();
     damageNumbers.dispose();
     for (const e of enemies) e.dispose();
     weapon.dispose();

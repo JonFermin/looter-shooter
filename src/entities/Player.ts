@@ -240,6 +240,15 @@ export class Player {
     return this.root;
   }
 
+  /**
+   * Current view yaw in radians. 0 = facing +Z; positive = clockwise looking
+   * down from +Y. Exposed via a method (not a getter) to dodge the name
+   * clash with the private `yaw` field.
+   */
+  getViewYaw(): number {
+    return this.yaw;
+  }
+
   /** Current hit points (0..maxHp). */
   get hp(): number {
     return this._hp;
