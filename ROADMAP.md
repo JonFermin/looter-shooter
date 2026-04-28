@@ -52,10 +52,10 @@ Key files: `scripts/copy-assets.mjs`, `src/utils/AssetLoader.ts`, `src/input/Inp
 
 ## Phase 3 — Player + Arena (parallel) — MILESTONE: walk on a flat plane, fly through the empty settlement
 
-- TODO [P0] [L] #5: Player entity — rigged mesh + idle/walk/run animation playback + third-person `FollowCamera` + WASD movement + mouse-look + jump — depends: #2, #3 — scope: `src/entities/Player.ts`, `src/scenes/Game.ts`
+- IN PROGRESS [P0] [L] #5: Player entity — rigged mesh + idle/walk/run animation playback + third-person `FollowCamera` + WASD movement + mouse-look + jump — depends: #2 ✓, #3 ✓ — scope: `src/entities/Player.ts`, `src/scenes/Game.ts`
   AC: `build` exits 0; `lint` exits 0; `dev` shows a flat `CreateGround` with the player character standing on it; WASD moves the player relative to camera-forward; mouse rotates the FollowCamera around the player; space jumps with simple gravity (no Havok); animation transitions cleanly between idle ↔ walk/run based on velocity magnitude; `Player.ts` exports `getRightHandTransform()` returning a `TransformNode` for future weapon attachment; no console errors
 
-- TODO [P0] [L] #6: Settlement arena scene — wasteland courtyard from `kenney/retro-urban-kit` + `survival-kit` + a few `city-kit-industrial` buildings — depends: #2 — scope: `src/scenes/Arena.ts`, `src/scenes/_dev/ArenaPreview.ts`
+- IN PROGRESS [P0] [L] #6: Settlement arena scene — wasteland courtyard from `kenney/retro-urban-kit` + `survival-kit` + a few `city-kit-industrial` buildings — depends: #2 ✓ — scope: `src/scenes/Arena.ts`, `src/scenes/_dev/ArenaPreview.ts`
   AC: `build` exits 0; `lint` exits 0; `Arena.ts` exports `buildArena(scene): Promise<{spawnPoint: Vector3, bounds: BoundingBox}>` that loads ≥15 environment GLBs forming an enclosed ~50×50-unit wasteland courtyard with cover props (barrels, crates, ramshackle walls, 2–3 building shells); `_dev/ArenaPreview.ts` is a temporary entry that renders the arena with an `ArcRotateCamera`, a `HemisphericLight`, and a `DirectionalLight`; `dev` (when pointed at the preview) shows a navigable scene with no console errors
 
 ## Phase 4 — Combat building blocks (parallel)
