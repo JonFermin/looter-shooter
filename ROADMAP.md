@@ -40,10 +40,8 @@
 - Audio: out of scope for v1 (placeholder silent).
 - Single arena, single class, no story/dialogue/quests, no vehicles, no elemental damage, no boss enemies — per user-stated out-of-scope list.
 
-## Phase 1 — Scaffold
-
-- IN PROGRESS [P0] [M] #1: Bootstrap project from `babylon-template`, install `@babylonjs/loaders` + `@babylonjs/gui` + `eslint` (with TS plugin), set up GLB loader side-effect import, smoke-test render — scope: `./` (root: `package.json`, `tsconfig.json`, `vite.config.ts`, `index.html`, `.eslintrc.cjs`, `src/main.ts`, `src/scenes/Game.ts`, `src/utils/time.ts`, `CLAUDE.md`, `AI_RULES.md`, `.gitignore`)
-  AC: `build` exits 0; `lint` exits 0; `dev` server starts and `index.html` renders a Babylon canvas with one visible `MeshBuilder.CreateBox`, one `HemisphericLight`, an `ArcRotateCamera`, and zero console errors
+## Phase 1 — DONE
+Built: Vite + TypeScript + Babylon.js 8 project scaffolded from `babylon-template`, with `@babylonjs/loaders` and `@babylonjs/gui` installed and `eslint` + `@typescript-eslint/*` configured. Smoke scene renders a CreateBox + HemisphericLight + ArcRotateCamera. Patterns: ES module deep imports with `.js` extensions on `@babylonjs/core/...`; `EngineFactory.CreateAsync` for WebGPU/WebGL auto-select; type against `AbstractEngine` (not `Engine`); side-effect imports for loaders/GUI added in `src/main.ts`; HMR-safe engine disposal via `import.meta.hot?.dispose`; per-frame logic uses `getDeltaSeconds(scene)` from `src/utils/time.ts`. ESLint config in `.eslintrc.cjs` with `argsIgnorePattern: "^_"` for unused-var warnings. `tsconfig.json` includes `"types": ["vite/client"]` so `import.meta.hot` resolves. Key files: `package.json` (scripts: `dev`/`build`/`build:dev`/`preview`/`lint`), `src/main.ts` (entry), `src/scenes/Game.ts` (`createGameScene` factory), `src/utils/time.ts`, `AI_RULES.md` (project conventions for all future agents to follow), `CLAUDE.md` (one-liner pointing at AI_RULES.md). (1/1 tasks)
 
 ## Phase 2 — Foundations (parallel)
 
