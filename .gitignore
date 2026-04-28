@@ -6,3 +6,9 @@ dist/
 .env.local
 .vscode/
 *.log
+
+# Claude Code agent worktrees, settings, transcripts
+.claude/
+
+# Stray debug screenshots / capture artifacts
+player-scene-initial.png
