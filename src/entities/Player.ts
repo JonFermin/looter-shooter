@@ -85,6 +85,7 @@ export class Player {
 
   private vy = 0;
   private grounded = true;
+  private guitarHidden = false;
 
   // Keep references so dispose() can detach/clean up.
   private beforeRenderObserver: Nullable<Observer<Scene>> = null;
@@ -153,6 +154,56 @@ export class Player {
    */
   getRightHandTransform(): TransformNode {
     return this.rightHandTransform;
+  }
+
+  /**
+   * World-space position of the player root anchor. Returned as a live
+   * reference (not a clone) — callers should treat it as read-only. Used by
+   * downstream systems (LootSystem nearestPickup, weapon HUD, AI targeting)
+   * that need the player's location without reaching through scene mesh
+   * lookups.
+   */
+  get position(): Vector3 {
+    return this.root.position;
+  }
+
+  /**
+   * Hide the Lis rig's `Guitar` sub-mesh. The Quaternius "SingleWeapon"
+   * variant of the character ships with a guitar prop attached — it's
+   * visible by default and looks wrong once we attach a real weapon at the
+   * right hand. Idempotent: safe to call repeatedly.
+   *
+   * We accept any mesh whose name matches /guitar/i (the export typically
+   * names it "Guitar" but variants/skinned-mesh suffixes can creep in).
+   * Hides the matching mesh AND every descendant so child geometry under
+   * the guitar transform also disappears.
+   */
+  hideGuitarMesh(): void {
+    if (this.guitarHidden) return;
+    let hit = false;
+    for (const mesh of this.scene.meshes) {
+      // Only consider meshes that descend from this player's root so we
+      // don't accidentally hide a guitar elsewhere in the scene.
+      if (!mesh.isDescendantOf(this.root)) continue;
+      if (!/guitar/i.test(mesh.name)) continue;
+      mesh.isVisible = false;
+      // Also hide any descendant meshes (multi-part guitars exist on some
+      // Quaternius rigs — body + strings + head).
+      for (const child of mesh.getChildMeshes()) {
+        child.isVisible = false;
+      }
+      hit = true;
+    }
+    // Mark idempotent regardless of hit so callers don't re-scan every
+    // frame even if the mesh was missing on this rig variant.
+    this.guitarHidden = true;
+    if (!hit) {
+      // Quiet warning — keeps the demo clean if the guitar prop ever moves
+      // to a different name in a future Quaternius export.
+      console.warn(
+        "[Player.hideGuitarMesh] no Guitar mesh found under playerRoot",
+      );
+    }
   }
 
   dispose(): void {
