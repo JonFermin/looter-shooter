@@ -51,7 +51,7 @@ Built: Vite + TypeScript + Babylon.js 8 project scaffolded from `babylon-templat
 - DONE [P0] [S] #3: Input helper — held-key keyboard state + mouse-look pointer-lock + click events — scope: `src/input/Input.ts`
   AC: `build` exits 0; `lint` exits 0; `src/input/Input.ts` exports an `Input` class with `isDown(key: string): boolean`, `getMouseDelta(): {dx,dy}` (resets per frame), `requestPointerLock(canvas)`, `onClick(button, handler)` and `onPointerLockChange(handler)`; usable from any entity without per-entity wiring
 
-- IN PROGRESS [P0] [M] #4: Rarity model + procedural stat-roll system (data + math, no rendering) — scope: `src/data/Rarity.ts`, `src/data/WeaponArchetype.ts`, `src/systems/StatRoll.ts`
+- DONE [P0] [M] #4: Rarity model + procedural stat-roll system (data + math, no rendering) — scope: `src/data/Rarity.ts`, `src/data/WeaponArchetype.ts`, `src/systems/StatRoll.ts`
   AC: `build` exits 0; `lint` exits 0; `Rarity.ts` exports `enum RarityTier { COMMON, UNCOMMON, RARE, EPIC, LEGENDARY }` plus a `RARITY_COLOR` map of hex strings (white/green/blue/purple/orange) and a `RARITY_WEIGHT` table for drop probability; `WeaponArchetype.ts` exports an `Archetype` enum (PISTOL/SMG/RIFLE/SHOTGUN/BLASTER) with base-stat ranges (damage, fireRate, magazine, reloadTime, accuracy); `StatRoll.ts` exports `rollWeapon(archetype, rarity, seed?): WeaponStats` returning a deterministic-with-seed randomized stat block where higher rarity yields higher stats on average; an inline self-test in the file's main-guard verifies a LEGENDARY roll's mean damage exceeds a COMMON roll's over 1000 samples
 
 ## Phase 3 — Player + Arena (parallel) — MILESTONE: walk on a flat plane, fly through the empty settlement
