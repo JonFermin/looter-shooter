@@ -83,7 +83,7 @@ Key files: `src/ui/Hud.ts` (NEW), `src/systems/WaveSpawner.ts` (NEW), `src/scene
 - TODO [P0] [L] #13: Inventory UI — 4×6 grid with rarity-colored item cards, equip / compare / discard, Tab to toggle — depends: #4 ✓, #7 ✓, #9 ✓ — scope: `src/ui/Inventory.ts`, `src/entities/Player.ts`
   AC: `build` exits 0; `lint` exits 0; `dev` — `Tab` opens an inventory panel built with `@babylonjs/gui` showing a 4×6 grid; picking up loot adds a card to the next empty slot showing weapon name + archetype icon (from `kenney/2d/game-icons`) + damage / fireRate / magazine, with a colored border per `RarityTier`; clicking a card shows a compare-with-equipped tooltip side-by-side; `E` equips the selected card (swaps with current weapon, dropping the old one as a `LootDrop` at the player's feet); `X` discards; `Player.ts` exposes `inventory: WeaponStats[]` and `equipped: WeaponStats` for save/load to consume
 
-- TODO [P1] [S] #14: Damage numbers (world-space billboards on hit) + crosshair hit-marker flash — depends: #10 ✓ — scope: `src/ui/DamageNumbers.ts`, `src/systems/Combat.ts`
+- IN PROGRESS [P1] [S] #14: Damage numbers (world-space billboards on hit) + crosshair hit-marker flash — depends: #10 ✓ — scope: `src/ui/DamageNumbers.ts`, `src/systems/Combat.ts`
   AC: `build` exits 0; `lint` exits 0; `dev` — hitting an enemy spawns a yellow billboard text `damage` above the impact that drifts up + fades over 800ms; the HUD crosshair briefly flashes white on hit confirmation; `Combat.ts` emits an `onHit` observable consumed by both `DamageNumbers.ts` and `Hud.ts`
 
 ## Phase 8 — Persistence + Polish — MILESTONE: vertical slice playable end-to-end
