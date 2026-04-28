@@ -143,15 +143,13 @@ export class Player {
     // Wrap in a clean Mesh anchor so we own translation/rotation without
     // fighting whatever transforms the export baked in. Bare Mesh has no
     // geometry, doesn't render, but satisfies FollowCamera.lockedTarget's
-    // AbstractMesh requirement.
+    // AbstractMesh requirement. Quaternius Lis exports facing +Z natively,
+    // matching our convention (camera at -Z = behind, W = +Z forward), so
+    // no extra rotation is applied here. (Earlier code rotated 180° on the
+    // mistaken assumption the model faced -Z, which put the camera at the
+    // model's face — see the camera bug reported during Phase 6.)
     const wrapper = new Mesh("playerRoot", this.scene);
     firstRoot.parent = wrapper;
-    // Quaternius Lis exports facing -Z; rotate 180° so the model faces +Z
-    // (camera-forward when yaw=0). rootNodes[0] is typed as Node, so we
-    // narrow to TransformNode before calling rotate.
-    if (firstRoot instanceof TransformNode) {
-      firstRoot.rotate(Vector3.Up(), Math.PI);
-    }
     this.root = wrapper;
 
     this.collectAnimationGroups(instance.animationGroups);
