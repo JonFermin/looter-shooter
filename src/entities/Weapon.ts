@@ -28,6 +28,7 @@ import { CreateLines } from "@babylonjs/core/Meshes/Builders/linesBuilder.js";
 import { loadGLB } from "../utils/AssetLoader.js";
 import type { WeaponStats } from "../data/WeaponArchetype.js";
 import { RARITY_COLOR, type RarityTier } from "../data/Rarity.js";
+import { play, playRandom, FIRE_KEYS } from "../audio/AudioManager.js";
 
 export interface WeaponConfig {
   stats: WeaponStats;
@@ -91,6 +92,13 @@ export class Weapon {
   private _isReloading = false;
   private reloadRemainingMs = 0;
   private cooldownRemainingMs = 0;
+
+  // The fire() call is invoked every frame the user holds the trigger
+  // (Combat.fire is wired to onClick edges, but other call sites and
+  // future auto-fire weapons could spam it). When the magazine is empty
+  // we want the empty-mag click to play once per "trigger pull" rather
+  // than 60x/sec — gate via a 500ms minimum gap between plays.
+  private lastNoAmmoSoundAtMs = -Infinity;
 
   // Active tracer cleanup queue. Each entry = (mesh, dispose-at-ms,
   // dispose-callback). Per-frame update fades alpha and disposes when due.
@@ -235,10 +243,18 @@ export class Weapon {
     hitPointWorld: Vector3 | null,
   ): FireResult | null {
     if (this._isReloading) return null;
-    if (this._ammo <= 0) return null;
+    if (this._ammo <= 0) {
+      const now = performance.now();
+      if (now - this.lastNoAmmoSoundAtMs >= 500) {
+        this.lastNoAmmoSoundAtMs = now;
+        play("no-ammo");
+      }
+      return null;
+    }
     if (this.cooldownRemainingMs > 0) return null;
 
     this._ammo -= 1;
+    playRandom(FIRE_KEYS);
 
     // Per-shot cooldown derived from fireRate (shots/sec). 1/fireRate sec
     // between shots. Multiply by 1000 once for ms.
@@ -270,6 +286,7 @@ export class Weapon {
     if (this._ammo >= this.cfg.stats.magazine) return;
     this._isReloading = true;
     this.reloadRemainingMs = this.cfg.stats.reloadTime * 1000;
+    play("reload");
   }
 
   /**

@@ -20,6 +20,7 @@ import { loadGLB } from "../utils/AssetLoader.js";
 import { getDeltaSeconds } from "../utils/time.js";
 import type { Input } from "../input/Input.js";
 import type { InventoryItem } from "../data/InventoryItem.js";
+import { play, startLoop } from "../audio/AudioManager.js";
 
 const PLAYER_MESH_PATH = "/assets/characters/Characters_Lis_SingleWeapon.gltf";
 
@@ -86,6 +87,11 @@ export class Player {
   private allAnimGroups: AnimationGroup[] = [];
 
   private currentState: AnimState = "idle";
+  // Stop function returned by AudioManager.startLoop("footstep") while the
+  // player is in walk/run state. null when no loop is active. Cleared on
+  // dispose() and respawn() so a death mid-walk doesn't leave the loop
+  // playing silently behind the death screen.
+  private footstepStop: (() => void) | null = null;
 
   // View yaw in radians. The player body tracks this directly so movement is
   // camera-relative and strafing keeps the crosshair aligned with the weapon.
@@ -395,6 +401,7 @@ export class Player {
       const prevHp = this._hp;
       this._hp = Math.max(0, this._hp - hpHit);
       if (this._hp === 0 && prevHp > 0) {
+        play("player-death");
         // Notify before respawn so subscribers see the dying state and can
         // capture wave/kill counters before the auto-respawn restores HP.
         this.onDied.notifyObservers();
@@ -418,6 +425,11 @@ export class Player {
     this.root.position.copyFrom(this._spawnPoint);
     this.vy = 0;
     this.grounded = true;
+    // Kill any in-flight footstep loop so the body lying dead/respawning
+    // doesn't keep crunching sand.
+    this.footstepStop?.();
+    this.footstepStop = null;
+    this.currentState = "idle";
   }
 
   /**
@@ -484,6 +496,8 @@ export class Player {
       this.canvas.removeEventListener("click", this.clickListener);
       this.clickListener = undefined;
     }
+    this.footstepStop?.();
+    this.footstepStop = null;
     for (const g of this.allAnimGroups) {
       g.stop();
     }
@@ -785,26 +799,49 @@ export class Player {
   }
 
   private updateAnimationState(_moved: boolean): void {
+    const previous = this.currentState;
     if (!this.grounded) {
       this.currentState = "jump";
-      return;
-    }
-    // Approximate horizontal speed via WASD intent (cheap — no per-frame
-    // delta math). Running flag bumps us into the "run" bucket.
-    const fwd = this.input.isDown("w") ? 1 : 0;
-    const back = this.input.isDown("s") ? 1 : 0;
-    const left = this.input.isDown("a") ? 1 : 0;
-    const right = this.input.isDown("d") ? 1 : 0;
-    const intentMag = Math.hypot(fwd - back, right - left);
-    const running = this.input.isDown("shift");
-    const effectiveSpeed = intentMag === 0 ? 0 : running ? RUN_SPEED : WALK_SPEED;
-
-    if (effectiveSpeed < WALK_THRESHOLD) {
-      this.currentState = "idle";
-    } else if (effectiveSpeed >= RUN_THRESHOLD) {
-      this.currentState = "run";
     } else {
-      this.currentState = "walk";
+      // Approximate horizontal speed via WASD intent (cheap — no per-frame
+      // delta math). Running flag bumps us into the "run" bucket.
+      const fwd = this.input.isDown("w") ? 1 : 0;
+      const back = this.input.isDown("s") ? 1 : 0;
+      const left = this.input.isDown("a") ? 1 : 0;
+      const right = this.input.isDown("d") ? 1 : 0;
+      const intentMag = Math.hypot(fwd - back, right - left);
+      const running = this.input.isDown("shift");
+      const effectiveSpeed =
+        intentMag === 0 ? 0 : running ? RUN_SPEED : WALK_SPEED;
+
+      if (effectiveSpeed < WALK_THRESHOLD) {
+        this.currentState = "idle";
+      } else if (effectiveSpeed >= RUN_THRESHOLD) {
+        this.currentState = "run";
+      } else {
+        this.currentState = "walk";
+      }
+    }
+
+    if (previous !== this.currentState) {
+      this.handleFootstepTransition(previous, this.currentState);
+    }
+  }
+
+  /**
+   * Drive the looped footstep audio off animation-state transitions.
+   * Walk + run share one looped sample (a faster cadence for run would be
+   * a per-state pitch shift; out of scope for v1). idle/jump silence the
+   * loop. The stop function is held until the next idle/jump transition.
+   */
+  private handleFootstepTransition(prev: AnimState, next: AnimState): void {
+    const wasMoving = prev === "walk" || prev === "run";
+    const isMoving = next === "walk" || next === "run";
+    if (!wasMoving && isMoving) {
+      this.footstepStop = startLoop("footstep");
+    } else if (wasMoving && !isMoving) {
+      this.footstepStop?.();
+      this.footstepStop = null;
     }
   }
 

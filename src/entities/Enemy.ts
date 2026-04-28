@@ -28,6 +28,7 @@ import { Observable } from "@babylonjs/core/Misc/observable.js";
 
 import { loadGLB } from "../utils/AssetLoader.js";
 import { EnemyState, EnemyStateMachine } from "../ai/EnemyStateMachine.js";
+import { play, playRandom, SCREAM_KEYS } from "../audio/AudioManager.js";
 
 export type EnemyType = "zombie" | "ufo";
 
@@ -417,6 +418,7 @@ export class Enemy {
     void pickInfo;
 
     this.spawnTracer(origin, target.position.clone());
+    play("ufo-fire");
   }
 
   private faceTowards(dx: number, dz: number, dt: number): void {
@@ -456,6 +458,11 @@ export class Enemy {
     this._isDead = true;
     this.stateMachine.transition(EnemyState.DEAD);
     this.deathStartedAtMs = performance.now();
+    if (this.opts.type === "ufo") {
+      play("ufo-death");
+    } else {
+      playRandom(SCREAM_KEYS);
+    }
     if (!this._onDeathFired) {
       this._onDeathFired = true;
       this.onDeath.notifyObservers(this);

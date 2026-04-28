@@ -18,6 +18,7 @@ import { Vector3 } from "@babylonjs/core/Maths/math.vector.js";
 import { Observable } from "@babylonjs/core/Misc/observable.js";
 
 import type { Weapon } from "../entities/Weapon.js";
+import { playRandom, IMPACT_KEYS } from "../audio/AudioManager.js";
 
 export interface Hit {
   /** World-space hit point. */
@@ -46,6 +47,7 @@ export const onHit: Observable<HitEvent> = new Observable<HitEvent>();
 
 export function notifyHit(event: HitEvent): void {
   onHit.notifyObservers(event);
+  playRandom(IMPACT_KEYS);
 }
 
 const MAX_RANGE = 100;

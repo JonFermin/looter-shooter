@@ -66,6 +66,7 @@ import {
   saveState,
   serializedToItem,
 } from "../persistence/SaveLoad.js";
+import { registerAllSounds, unlock as unlockAudio } from "../audio/AudioManager.js";
 
 const ASSET_BASE = "/assets/environment";
 
@@ -462,6 +463,20 @@ export async function createArenaScene(
   // Wasteland sky — desaturated dusk so the Kenney prop palette pops.
   scene.clearColor = new Color4(0.5, 0.55, 0.6, 1);
 
+  // Kick off audio asset preload as early as possible — registerSound()
+  // creates HTMLAudioElement instances which begin downloading immediately.
+  // unlock() stays gated on user gesture (canvas click or StartScreen
+  // dismiss) per browser autoplay policy. Idempotent across HMR.
+  registerAllSounds();
+  // First canvas click unlocks audio. Independent of StartScreen so the
+  // skip-intro flow (StartScreen fires onStart synchronously in ctor)
+  // still gets audio after the player clicks once to acquire pointer-lock.
+  const onFirstClickAudio = (): void => {
+    unlockAudio();
+    canvas.removeEventListener("click", onFirstClickAudio);
+  };
+  canvas.addEventListener("click", onFirstClickAudio);
+
   // Lighting: hemispheric for cheap ambient + a directional sun for shape.
   const hemi = new HemisphericLight("hemi", new Vector3(0, 1, 0), scene);
   hemi.intensity = 0.55;
@@ -782,7 +797,10 @@ export async function createArenaScene(
 
   // Gate wave 1 behind the StartScreen — no enemies spawn until the
   // player presses any key. The screen disposes itself on first keydown.
+  // The keydown that dismisses the start screen is also a user gesture, so
+  // we call unlockAudio() here to cover the keyboard-only flow.
   const startScreen = new StartScreen(scene, () => {
+    unlockAudio();
     spawner.start();
   });
 
@@ -1023,6 +1041,7 @@ export async function createArenaScene(
     scene.onBeforeRenderObservable.remove(beforeRender);
     unsubscribeFire();
     window.removeEventListener("keydown", tabKeyListener);
+    canvas.removeEventListener("click", onFirstClickAudio);
     startScreen.dispose();
     deathScreen?.dispose();
     inventory.dispose();

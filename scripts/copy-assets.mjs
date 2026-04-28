@@ -131,6 +131,36 @@ const UI_PACKS = [
   "game-icons",
 ];
 
+// Audio one-shots flattened into public/assets/audio/. Several packs ship a
+// `death.wav` and other generic names that would collide if we kept the
+// source filenames verbatim — namespace clashing files with a pack prefix
+// (`space-`, `topdown-`) so the runtime AudioManager registry stays flat
+// and unambiguous. Tuples are [sourceRel, destFilename].
+const AUDIO_FILES = [
+  // Western-fps-2d (gun, reload, no-ammo, impact, scream, footstep)
+  ["superpowers/western-fps-2d/sounds/gun-1.ogg", "gun-1.ogg"],
+  ["superpowers/western-fps-2d/sounds/gun-2.ogg", "gun-2.ogg"],
+  ["superpowers/western-fps-2d/sounds/gun-3.ogg", "gun-3.ogg"],
+  ["superpowers/western-fps-2d/sounds/gun-4.ogg", "gun-4.ogg"],
+  ["superpowers/western-fps-2d/sounds/gun-5.ogg", "gun-5.ogg"],
+  ["superpowers/western-fps-2d/sounds/reload.ogg", "reload.ogg"],
+  ["superpowers/western-fps-2d/sounds/no-ammo.ogg", "no-ammo.ogg"],
+  ["superpowers/western-fps-2d/sounds/impact-1.ogg", "impact-1.ogg"],
+  ["superpowers/western-fps-2d/sounds/impact-2.ogg", "impact-2.ogg"],
+  ["superpowers/western-fps-2d/sounds/scream-1.ogg", "scream-1.ogg"],
+  ["superpowers/western-fps-2d/sounds/scream-2.ogg", "scream-2.ogg"],
+  ["superpowers/western-fps-2d/sounds/scream-3.ogg", "scream-3.ogg"],
+  ["superpowers/western-fps-2d/sounds/scream-4.ogg", "scream-4.ogg"],
+  ["superpowers/western-fps-2d/sounds/scream-5.ogg", "scream-5.ogg"],
+  ["superpowers/western-fps-2d/sounds/scream-6.ogg", "scream-6.ogg"],
+  ["superpowers/western-fps-2d/sounds/sand-step.ogg", "sand-step.ogg"],
+  // Space-shooter (UFO laser + boss death used for UFO death)
+  ["superpowers/space-shooter/sounds/laser.wav", "laser.wav"],
+  ["superpowers/space-shooter/sounds/boss-death.wav", "space-boss-death.wav"],
+  // Top-down-shooter (player death thump)
+  ["superpowers/top-down-shooter/sounds/death.wav", "topdown-death.wav"],
+];
+
 // ---------------------------------------------------------------------------
 // File-copy helpers
 // ---------------------------------------------------------------------------
@@ -435,6 +465,22 @@ async function copyEnvironment() {
   summary("environment", { GLB: glbs, companions: flushed.copied });
 }
 
+async function copyAudio() {
+  let count = 0;
+  let bytes = 0;
+  for (const [srcRel, destFilename] of AUDIO_FILES) {
+    const srcAbs = join(SRC_ROOT, srcRel);
+    const destAbs = join(DEST_ROOT, "audio", destFilename);
+    const r = await copyOneFile(srcAbs, destAbs);
+    if (r.bytes > 0) {
+      count += 1;
+      bytes += r.bytes;
+    }
+  }
+  summary("audio", { files: count });
+  return bytes;
+}
+
 async function copyPngPacks(category, packs, sourceParent) {
   let pngs = 0;
   let bytes = 0;
@@ -467,6 +513,7 @@ async function main() {
   await copyEnvironment();
   await copyPngPacks("fx", FX_PACKS, "kenney/2d");
   await copyPngPacks("ui", UI_PACKS, "kenney/2d");
+  await copyAudio();
 
   console.log("");
   console.log(
