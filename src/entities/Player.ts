@@ -2,6 +2,7 @@ import type { Scene } from "@babylonjs/core/scene.js";
 import type { Bone } from "@babylonjs/core/Bones/bone.js";
 import { Vector3 } from "@babylonjs/core/Maths/math.vector.js";
 import { Quaternion } from "@babylonjs/core/Maths/math.vector.js";
+import type { BoundingBox } from "@babylonjs/core/Culling/boundingBox.js";
 import { TransformNode } from "@babylonjs/core/Meshes/transformNode.js";
 import { Mesh } from "@babylonjs/core/Meshes/mesh.js";
 import { FollowCamera } from "@babylonjs/core/Cameras/followCamera.js";
@@ -87,6 +88,15 @@ export class Player {
   private grounded = true;
   private guitarHidden = false;
 
+  // HP/respawn state. Settable spawn point so the Arena scene can position
+  // the player at the courtyard center. takeDamage() clamps to 0 and triggers
+  // respawn() which logs "you died", restores HP, and teleports back to
+  // _spawnPoint without disturbing the equipped weapon (weapons are parented
+  // to the bone TransformNode and travel with the player root).
+  private _hp = 100;
+  private _maxHp = 100;
+  private _spawnPoint = new Vector3(0, 0, 0);
+
   // Keep references so dispose() can detach/clean up.
   private beforeRenderObserver: Nullable<Observer<Scene>> = null;
   private clickListener?: () => void;
@@ -165,6 +175,79 @@ export class Player {
    */
   get position(): Vector3 {
     return this.root.position;
+  }
+
+  /**
+   * Public read-only accessor for the player's root Mesh. The Combat picking
+   * predicate uses this to walk up the parent chain when checking whether
+   * a hit mesh belongs to the player so we never self-hit. Also used for
+   * weapon-mesh exclusion in shared scenes.
+   */
+  get rootMesh(): Mesh {
+    return this.root;
+  }
+
+  /** Current hit points (0..maxHp). */
+  get hp(): number {
+    return this._hp;
+  }
+
+  /** Maximum hit points (constant for now; tuning will live in data later). */
+  get maxHp(): number {
+    return this._maxHp;
+  }
+
+  /**
+   * Where the player respawns when HP hits zero. Defaults to (0,0,0); the
+   * Arena scene calls this with `Arena.spawnPoint` once buildArena resolves.
+   * Stores a clone so external mutation of the supplied Vector3 doesn't drift
+   * the spawn point under us.
+   */
+  setSpawnPoint(p: Vector3): void {
+    this._spawnPoint = p.clone();
+  }
+
+  /**
+   * Apply incoming damage to the player. Clamps HP at 0. When HP reaches 0
+   * we trigger an immediate respawn (no death animation yet — Phase 6 will
+   * own the proper death state + UI). Damage values <= 0 are no-ops.
+   */
+  takeDamage(amount: number): void {
+    if (amount <= 0) return;
+    if (this._hp <= 0) return; // already dead, mid-respawn; ignore
+    this._hp = Math.max(0, this._hp - amount);
+    if (this._hp === 0) {
+      this.respawn();
+    }
+  }
+
+  /**
+   * Restore full HP and teleport back to the configured spawn point. Also
+   * clears in-flight jump velocity / grounded state so the player lands on
+   * the floor at the spawn rather than continuing a previous arc.
+   */
+  respawn(): void {
+    console.log("you died");
+    this._hp = this._maxHp;
+    this.root.position.copyFrom(this._spawnPoint);
+    this.vy = 0;
+    this.grounded = true;
+  }
+
+  /**
+   * Clamp the player's XZ position to the supplied bounding box. Y is left
+   * alone so jumping still works. Called from the Arena scene's per-frame
+   * loop after Player.update() so the player can't walk through perimeter
+   * walls into the void.
+   */
+  clampToBounds(bounds: BoundingBox): void {
+    const p = this.root.position;
+    const min = bounds.minimumWorld;
+    const max = bounds.maximumWorld;
+    if (p.x < min.x) p.x = min.x;
+    else if (p.x > max.x) p.x = max.x;
+    if (p.z < min.z) p.z = min.z;
+    else if (p.z > max.z) p.z = max.z;
   }
 
   /**
