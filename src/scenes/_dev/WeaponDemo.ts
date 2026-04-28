@@ -17,6 +17,13 @@
 //     "./scenes/_dev/WeaponDemo.js";
 // Revert before committing.
 
+// AdvancedDynamicTexture relies on engine.createDynamicTexture, which is
+// registered by side-effect from these two files (one for WebGL, one for
+// WebGPU). Without them the WebGPU path throws "createDynamicTexture is
+// not a function" the first time we build the HUD.
+import "@babylonjs/core/Engines/Extensions/engine.dynamicTexture.js";
+import "@babylonjs/core/Engines/WebGPU/Extensions/engine.dynamicTexture.js";
+
 import { Scene } from "@babylonjs/core/scene.js";
 import type { AbstractEngine } from "@babylonjs/core/Engines/abstractEngine.js";
 import { Vector3 } from "@babylonjs/core/Maths/math.vector.js";
