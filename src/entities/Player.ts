@@ -29,11 +29,17 @@ const MOUSE_YAW_DEG_PER_PIXEL = 0.2;
 const MOUSE_PITCH_PER_PIXEL = 0.005;
 
 // FollowCamera tuning. radius = how far behind the player; heightOffset =
-// how high above the player; rotationOffset is in *degrees*. The
-// acceleration values control how quickly the camera catches up.
+// vertical offset relative to the locked target (positive = camera above,
+// negative = camera below); rotationOffset is in *degrees*.
+//
+// Babylon's FollowCamera always points AT the lockedTarget, so the way to
+// "look up" is to lower the camera (below the player), so the line-of-sight
+// to the target tilts upward and the sky appears beyond the player. The
+// way to "look down" is to raise the camera. So the height range spans both
+// sides of the player.
 const CAMERA_RADIUS = 6;
-const CAMERA_HEIGHT_MIN = 1.5;
-const CAMERA_HEIGHT_MAX = 5;
+const CAMERA_HEIGHT_MIN = -1.5; // looking up — camera below player, sees sky beyond
+const CAMERA_HEIGHT_MAX = 6; // looking down — camera high, sees ground beyond
 const CAMERA_HEIGHT_DEFAULT = 2.5;
 const CAMERA_ROT_ACCEL = 0.05;
 const CAMERA_HEIGHT_ACCEL = 0.05;
@@ -82,7 +88,9 @@ export class Player {
   private yaw = 0;
   // Camera pitch in radians (vertical look). Translated into heightOffset
   // by mapping pitch range -> height range so FollowCamera handles the rest.
-  private pitch = 0.4; // ~23 deg above horizontal — looking slightly down
+  // 0 = horizontal forward (default neutral); positive = looking up at sky;
+  // negative = looking down at ground. Clamped in handleMouseLook.
+  private pitch = 0;
 
   private vy = 0;
   private grounded = true;
@@ -510,12 +518,16 @@ export class Player {
   }
 
   private applyPitchToCamera(): void {
-    // Map pitch [-PI/4 .. PI/3] -> heightOffset [MIN .. MAX]. Higher pitch
-    // (looking up) raises the camera so we look down on the player.
+    // Map pitch [-PI/4 .. PI/3] -> heightOffset [MAX .. MIN] (inverted).
+    // Higher pitch (looking up) LOWERS the camera so its line-of-sight
+    // to the target tilts upward and the sky becomes visible beyond the
+    // player. Lower pitch raises the camera so we look down past the
+    // player at the ground. The previous mapping was inverted and capped
+    // out above the player, making "look up" feel like a stuck "look down".
     const t =
       (this.pitch + Math.PI / 4) / (Math.PI / 3 + Math.PI / 4); // 0..1
     this.camera.heightOffset =
-      CAMERA_HEIGHT_MIN + t * (CAMERA_HEIGHT_MAX - CAMERA_HEIGHT_MIN);
+      CAMERA_HEIGHT_MAX - t * (CAMERA_HEIGHT_MAX - CAMERA_HEIGHT_MIN);
   }
 
   private handleMovement(dt: number): boolean {
