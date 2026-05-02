@@ -36,6 +36,14 @@ export interface HitEvent extends Hit {
   lethal: boolean;
 }
 
+export interface FireOptions {
+  /**
+   * 0 = hip fire, 1 = fully braced aim. When omitted, Combat preserves the
+   * old perfect camera-ray behavior for legacy/dev call sites.
+   */
+  aimAmount?: number;
+}
+
 /**
  * Manual notification channel for confirmed enemy hits. Combat.fire does
  * NOT auto-emit — Combat doesn't know which meshes are enemies vs.
@@ -63,7 +71,11 @@ const MAX_RANGE = 100;
  * callers can write `Combat.fire(weapon, scene)` after a wildcard import,
  * matching the AC's `Combat.fire()` shape.
  */
-export function fire(weapon: Weapon, scene: Scene): Hit | null {
+export function fire(
+  weapon: Weapon,
+  scene: Scene,
+  options: FireOptions = {},
+): Hit | null {
   const camera = scene.activeCamera;
   if (!camera) {
     console.warn("[Combat.fire] no active camera; cannot fire");
@@ -75,7 +87,15 @@ export function fire(weapon: Weapon, scene: Scene): Hit | null {
   // can clamp to MAX_RANGE.
   const cameraRay = camera.getForwardRay(MAX_RANGE);
   const cameraOrigin = cameraRay.origin.clone();
-  const cameraDirection = cameraRay.direction.clone().normalize();
+  const baseCameraDirection = cameraRay.direction.clone().normalize();
+  const cameraDirection =
+    options.aimAmount === undefined
+      ? baseCameraDirection
+      : applyAccuracySpread(
+          baseCameraDirection,
+          weapon.stats.accuracy,
+          options.aimAmount,
+        );
   const aimingRay = new Ray(cameraOrigin, cameraDirection, MAX_RANGE);
 
   // Pick predicate: skip non-pickable meshes (Weapon disables picking on
@@ -105,4 +125,46 @@ export function fire(weapon: Weapon, scene: Scene): Hit | null {
     mesh: pickInfo.pickedMesh,
     distance: pickInfo.distance,
   };
+}
+
+function applyAccuracySpread(
+  direction: Vector3,
+  accuracy: number,
+  aimAmount: number,
+): Vector3 {
+  const spread = getSpreadRadians(accuracy, aimAmount);
+  if (spread <= 0.0001) return direction;
+
+  const up =
+    Math.abs(direction.y) > 0.98
+      ? new Vector3(1, 0, 0)
+      : new Vector3(0, 1, 0);
+  const right = Vector3.Cross(up, direction).normalize();
+  const realUp = Vector3.Cross(direction, right).normalize();
+  const theta = Math.random() * Math.PI * 2;
+  const radius = Math.sqrt(Math.random()) * spread;
+  const offsetScale = Math.tan(radius);
+
+  return direction
+    .add(right.scale(Math.cos(theta) * offsetScale))
+    .add(realUp.scale(Math.sin(theta) * offsetScale))
+    .normalize();
+}
+
+function getSpreadRadians(accuracy: number, aimAmount: number): number {
+  const precision = clamp01(accuracy);
+  const braced = clamp01(aimAmount);
+  const weaponCone = (1 - precision) * lerp(0.055, 0.014, braced);
+  const hipPenalty = (1 - braced) * 0.04;
+  return weaponCone + hipPenalty;
+}
+
+function clamp01(v: number): number {
+  if (v < 0) return 0;
+  if (v > 1) return 1;
+  return v;
+}
+
+function lerp(a: number, b: number, t: number): number {
+  return a + (b - a) * clamp01(t);
 }

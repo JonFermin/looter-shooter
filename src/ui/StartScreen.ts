@@ -90,7 +90,7 @@ export class StartScreen {
     this.texture.addControl(prompt);
 
     const hint = new TextBlock("startScreenHint");
-    hint.text = "WASD move  |  Mouse aim  |  LMB fire  |  R reload  |  Tab inventory";
+    hint.text = "WASD move  |  Mouse look  |  RMB aim  |  LMB fire  |  R reload  |  Tab inventory";
     hint.color = HINT_COLOR;
     hint.fontSize = 16;
     hint.fontFamily = "monospace";

@@ -5,6 +5,7 @@
 // Controls:
 //   WASD / Shift / Space — Player movement (inherited from Player.ts)
 //   Mouse                — look (pointer-locks on canvas click)
+//   Right-click          — brace aim
 //   Left-click           — fire weapon (raycasts from camera)
 //   R                    — reload
 //
@@ -170,7 +171,13 @@ export async function createWeaponDemoScene(
     // click of a session is consumed by the lock request. We detect "no
     // pointer lock" and bail; subsequent clicks fire normally.
     if (!document.pointerLockElement) return;
-    const hit = combatFire(weapon, scene);
+    const ammoBefore = weapon.ammo;
+    const hit = combatFire(weapon, scene, {
+      aimAmount: player.getAimAmount(),
+    });
+    if (weapon.ammo < ammoBefore) {
+      player.applyWeaponFireFeedback(weapon.stats);
+    }
     if (hit) {
       console.log("[WeaponDemo] Hit", {
         mesh: hit.mesh.name,

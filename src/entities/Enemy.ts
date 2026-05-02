@@ -168,8 +168,19 @@ export class Enemy {
     }
     this.allAnims = instance.animationGroups;
 
+    // instantiateModelsToScene applies the nameFunction above to every
+    // cloned entity — including animation groups — so their names are now
+    // prefixed with `${this.root.name}-`. Strip that prefix here so the
+    // lookup keys match the original Quaternius clip names. Without this,
+    // every byName.get("Idle") returns undefined and no animation plays.
+    const animPrefix = `${this.root.name}-`;
     const byName = new Map<string, AnimationGroup>();
-    for (const g of instance.animationGroups) byName.set(g.name, g);
+    for (const g of instance.animationGroups) {
+      const key = g.name.startsWith(animPrefix)
+        ? g.name.slice(animPrefix.length)
+        : g.name;
+      byName.set(key, g);
+    }
     // Quaternius zombiekit clip names (verified in Zombie_Basic.gltf):
     //   Idle, Walk, Run, Crawl, Death, HitReact, Idle_Attack, Run_Attack,
     //   Punch, Jump, Jump_Idle, Jump_Land, No, Wave, Yes.

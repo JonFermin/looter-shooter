@@ -15,11 +15,14 @@ import { Scene } from "@babylonjs/core/scene.js";
 import type { AbstractEngine } from "@babylonjs/core/Engines/abstractEngine.js";
 import type { AssetContainer } from "@babylonjs/core/assetContainer.js";
 import { Vector3 } from "@babylonjs/core/Maths/math.vector.js";
-import { Color4 } from "@babylonjs/core/Maths/math.color.js";
+import { Color3, Color4 } from "@babylonjs/core/Maths/math.color.js";
 import { HemisphericLight } from "@babylonjs/core/Lights/hemisphericLight.js";
 import { DirectionalLight } from "@babylonjs/core/Lights/directionalLight.js";
 import { BoundingBox } from "@babylonjs/core/Culling/boundingBox.js";
+import { MeshBuilder } from "@babylonjs/core/Meshes/meshBuilder.js";
 import type { AbstractMesh } from "@babylonjs/core/Meshes/abstractMesh.js";
+import { StandardMaterial } from "@babylonjs/core/Materials/standardMaterial.js";
+import { Texture } from "@babylonjs/core/Materials/Textures/texture.js";
 
 import { loadGLB } from "../utils/AssetLoader.js";
 import { getDeltaSeconds } from "../utils/time.js";
@@ -169,6 +172,32 @@ interface EdgeSpec {
   brokenIndices?: number[];
 }
 
+// Tiled dirt floor sized 8 units larger than the courtyard on each side so
+// wall bases sit on it. Texture is the Kenney `dirt.png` swatch wrapped via
+// uScale/vScale to avoid the visible stretch a single 1u texel would give
+// on a 56u plane. Pickable=false so combat raycasts don't absorb on the
+// floor (the existing isPickable filter in createArenaScene already nukes
+// player/loot pickability, but we set it here too for safety).
+function buildGround(scene: Scene): void {
+  const size = (HALF + 4) * 2;
+  const ground = MeshBuilder.CreateGround(
+    "arena-ground",
+    { width: size, height: size, subdivisions: 1 },
+    scene,
+  );
+  ground.isPickable = false;
+
+  const mat = new StandardMaterial("arena-ground-mat", scene);
+  const tex = new Texture(`${ASSET_BASE}/Textures/dirt.png`, scene);
+  // ~4u per tile reads as a wasteland sand/dirt scale without obvious tiling
+  // bands at the camera height the third-person cam sits at.
+  tex.uScale = size / 4;
+  tex.vScale = size / 4;
+  mat.diffuseTexture = tex;
+  mat.specularColor = new Color3(0, 0, 0);
+  ground.material = mat;
+}
+
 function buildEdgePlacements(
   edge: EdgeSpec,
 ): Array<{ filename: string; opts: PlacementOpts }> {
@@ -205,6 +234,12 @@ function buildEdgePlacements(
  * @returns spawn point at the courtyard center and the playable bounds
  */
 export async function buildArena(scene: Scene): Promise<ArenaInfo> {
+  // Tiled dirt floor covering the full courtyard (with a few units of
+  // overhang so wall feet sit on ground rather than floating). Without
+  // this the only floor coverage is the two road-asphalt props near the
+  // entry path — everything else reads as the sky clearColor.
+  buildGround(scene);
+
   // ---------------------------------------------------------------------
   // Build the full placement list first, then de-dupe filenames so we
   // fetch each GLB exactly once. This is the difference between "loads
@@ -791,7 +826,13 @@ export async function createArenaScene(
     // Only fire while pointer is locked — clicking to lock the pointer
     // shouldn't also waste a bullet.
     if (!document.pointerLockElement) return;
-    const hit = combatFire(weapon, scene);
+    const ammoBefore = weapon.ammo;
+    const hit = combatFire(weapon, scene, {
+      aimAmount: player.getAimAmount(),
+    });
+    if (weapon.ammo < ammoBefore) {
+      player.applyWeaponFireFeedback(weapon.stats);
+    }
     if (!hit) return;
     const target = enemyByMesh.get(hit.mesh);
     if (target) {
@@ -1028,6 +1069,29 @@ export async function createArenaScene(
     // order; Player.init() registers first, so its update has already run
     // before this callback fires.
     player.clampToBounds(bounds);
+
+    // Pickup-prompt feedback — the HUD shows "[E] pick up" + the rolled
+    // weapon's stats + an explainer that pickup goes to inventory and
+    // TAB equips. Hidden while a menu/death overlay is up so it doesn't
+    // bleed through. We compute nearestPickup once and reuse it both for
+    // the prompt and for the E-pickup edge below.
+    const promptVisible = !inventory.isOpen() && !deathScreenActive;
+    const promptDrop = promptVisible ? nearestPickup(player) : null;
+    if (promptDrop) {
+      const promptEntry = lookupWeaponEntryByMeshPath(promptDrop.meshPath);
+      if (promptEntry) {
+        hud.setPickupPrompt({
+          weapon: promptDrop.weapon,
+          rarity: promptDrop.rarity,
+          archetype: promptEntry.archetype,
+          displayName: promptEntry.displayName,
+        });
+      } else {
+        hud.setPickupPrompt(null);
+      }
+    } else {
+      hud.setPickupPrompt(null);
+    }
 
     // E keypress edge — single fire on transition from up to down. E has
     // two meanings depending on inventory state: closed = pickup nearest

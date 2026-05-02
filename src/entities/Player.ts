@@ -54,6 +54,24 @@ const CAMERA_SHOULDER_OFFSET_Y = 0.35;
 const CAMERA_PITCH_MIN = -Math.PI / 4;
 const CAMERA_PITCH_MAX = Math.PI / 3;
 
+// Helldivers-style braced aim: hold RMB to tighten the over-shoulder
+// camera, reduce mouse sensitivity, and trade sprint speed for precision.
+const AIM_MOUSE_BUTTON = 2;
+const AIM_TRANSITION_RATE = 10;
+const AIM_MOUSE_SENSITIVITY_MULTIPLIER = 0.68;
+const AIM_MOVE_SPEED_MULTIPLIER = 0.62;
+const AIM_CAMERA_DISTANCE = 3.2;
+const AIM_CAMERA_FOV = 0.78;
+const AIM_CAMERA_AIM_HEIGHT = 1.55;
+const AIM_CAMERA_SHOULDER_OFFSET_X = 1.12;
+const AIM_CAMERA_SHOULDER_OFFSET_Y = 0.22;
+const CAMERA_FOV_LERP_RATE = 14;
+
+// Camera-shake values are world-space offsets. Keep them small: this should
+// sell weapon impact without making targets unreadable during rapid fire.
+const DAMAGE_SHAKE_DURATION = 0.24;
+const DAMAGE_SHAKE_STRENGTH = 0.07;
+
 // How fast (in 0..1 weight per second) the active animation group fades in
 // while the others fade out, for crossfading. 6 -> ~166 ms blend.
 const ANIM_BLEND_RATE = 6;
@@ -64,6 +82,12 @@ const WALK_THRESHOLD = 0.05;
 const RUN_THRESHOLD = WALK_SPEED + 0.5;
 
 type AnimState = "idle" | "walk" | "run" | "jump";
+
+interface WeaponFeedbackStats {
+  damage: number;
+  fireRate: number;
+  accuracy: number;
+}
 
 export class Player {
   private readonly scene: Scene;
@@ -98,6 +122,12 @@ export class Player {
   private yaw = 0;
   // Vertical look angle in radians. 0 = level, positive = aim up.
   private pitch = -0.12;
+  // 0 = hip camera, 1 = fully braced aim camera. Smoothed to avoid popping.
+  private aimBlend = 0;
+  private cameraShakeRemaining = 0;
+  private cameraShakeDuration = 0;
+  private cameraShakeStrength = 0;
+  private cameraShakeSeed = 0;
 
   private vy = 0;
   private grounded = true;
@@ -149,6 +179,7 @@ export class Player {
   // Keep references so dispose() can detach/clean up.
   private beforeRenderObserver: Nullable<Observer<Scene>> = null;
   private clickListener?: () => void;
+  private contextMenuListener?: (e: MouseEvent) => void;
   private readonly flatForward = new Vector3(0, 0, 1);
   private readonly lookForward = new Vector3(0, 0, 1);
   private readonly right = new Vector3(1, 0, 0);
@@ -253,6 +284,19 @@ export class Player {
    */
   getViewYaw(): number {
     return this.yaw;
+  }
+
+  /**
+   * Current braced-aim blend, where 0 is hip camera and 1 is fully aimed.
+   * Combat uses this to tighten weapon spread while RMB is held.
+   */
+  getAimAmount(): number {
+    return this.aimBlend;
+  }
+
+  /** True once the braced camera is mostly settled in. */
+  isAiming(): boolean {
+    return this.aimBlend >= 0.65;
   }
 
   /** Current hit points (0..maxHp). */
@@ -395,6 +439,45 @@ export class Player {
   }
 
   /**
+   * Add a procedural camera impulse. Strength is a small world-space offset
+   * (roughly 0.02..0.12); duration is seconds.
+   */
+  addCameraShake(strength: number, duration: number): void {
+    if (strength <= 0 || duration <= 0) return;
+    const safeDuration = Math.max(0.01, duration);
+    this.cameraShakeDuration = safeDuration;
+    this.cameraShakeRemaining = Math.max(
+      this.cameraShakeRemaining,
+      safeDuration,
+    );
+    this.cameraShakeStrength = Math.max(
+      this.cameraShakeStrength * 0.65,
+      strength,
+    );
+    this.cameraShakeSeed = Math.random() * 1000;
+  }
+
+  /**
+   * Weapon-fire feedback: a small pitch climb plus screen shake, damped when
+   * the player is braced. Called only after Weapon.fire actually spent ammo.
+   */
+  applyWeaponFireFeedback(stats: WeaponFeedbackStats): void {
+    const damageKick = clamp(stats.damage / 35, 0.35, 1.7);
+    const fireRateDamping = clamp(5 / Math.max(1, stats.fireRate), 0.45, 1.2);
+    const accuracyKick = lerp(1.25, 0.85, clamp01(stats.accuracy));
+    const aimDamping = lerp(1, 0.55, this.aimBlend);
+    const impulse = damageKick * fireRateDamping * accuracyKick * aimDamping;
+
+    this.pitch = clamp(
+      this.pitch + 0.005 * impulse,
+      CAMERA_PITCH_MIN,
+      CAMERA_PITCH_MAX,
+    );
+    this.yaw += (Math.random() - 0.5) * 0.004 * impulse;
+    this.addCameraShake(0.025 + 0.025 * impulse, 0.11 + 0.05 * impulse);
+  }
+
+  /**
    * Apply incoming damage to the player. Shield absorbs first (1:1) and any
    * remainder spills into HP. Clamps HP at 0. When HP reaches 0 we trigger
    * an immediate respawn (no death animation yet — Phase 6 will own the
@@ -406,6 +489,7 @@ export class Player {
   takeDamage(amount: number): void {
     if (amount <= 0) return;
     if (this._hp <= 0) return; // already dead, mid-respawn; ignore
+    this.addCameraShake(DAMAGE_SHAKE_STRENGTH, DAMAGE_SHAKE_DURATION);
     this._timeSinceLastDamage = 0;
     const shieldHit = Math.min(this._shield, amount);
     this._shield -= shieldHit;
@@ -509,6 +593,10 @@ export class Player {
       this.canvas.removeEventListener("click", this.clickListener);
       this.clickListener = undefined;
     }
+    if (this.contextMenuListener) {
+      this.canvas.removeEventListener("contextmenu", this.contextMenuListener);
+      this.contextMenuListener = undefined;
+    }
     this.footstepStop?.();
     this.footstepStop = null;
     for (const g of this.allAnimGroups) {
@@ -558,7 +646,7 @@ export class Player {
     this.camera = camera;
     this.syncRootRotation();
     this.updateCameraBasis();
-    this.updateCamera();
+    this.updateCamera(1 / 60);
   }
 
   // The Lis rig has no explicit "Hand.R" bone — the fingers parent directly
@@ -610,18 +698,23 @@ export class Player {
       }
     };
     this.canvas.addEventListener("click", this.clickListener);
+    this.contextMenuListener = (e: MouseEvent) => {
+      e.preventDefault();
+    };
+    this.canvas.addEventListener("contextmenu", this.contextMenuListener);
   }
 
   private update(): void {
     const dt = getDeltaSeconds(this.scene);
     if (dt <= 0) return;
 
+    this.updateAimState(dt);
     this.handleMouseLook();
     this.updateCameraBasis();
     this.syncRootRotation();
     const moved = this.handleMovement(dt);
     this.handleJumpAndGravity(dt);
-    this.updateCamera();
+    this.updateCamera(dt);
     this.updateAnimationState(moved);
     this.crossfadeAnimations(dt);
     this.updateShield(dt);
@@ -648,13 +741,30 @@ export class Player {
   private handleMouseLook(): void {
     const { dx, dy } = this.input.getMouseDelta();
     if (dx === 0 && dy === 0) return;
+    const sensitivity = lerp(
+      1,
+      AIM_MOUSE_SENSITIVITY_MULTIPLIER,
+      this.aimBlend,
+    );
     // Negative dx so a rightward mouse move turns the view clockwise.
-    this.yaw -= dx * MOUSE_YAW_RAD_PER_PIXEL;
+    this.yaw -= dx * MOUSE_YAW_RAD_PER_PIXEL * sensitivity;
 
     // Negative dy because moving the mouse up should look up.
-    this.pitch -= dy * MOUSE_PITCH_RAD_PER_PIXEL;
+    this.pitch -= dy * MOUSE_PITCH_RAD_PER_PIXEL * sensitivity;
     if (this.pitch < CAMERA_PITCH_MIN) this.pitch = CAMERA_PITCH_MIN;
     if (this.pitch > CAMERA_PITCH_MAX) this.pitch = CAMERA_PITCH_MAX;
+  }
+
+  private updateAimState(dt: number): void {
+    const target =
+      document.pointerLockElement && this.input.isMouseDown(AIM_MOUSE_BUTTON)
+        ? 1
+        : 0;
+    this.aimBlend = moveToward(
+      this.aimBlend,
+      target,
+      AIM_TRANSITION_RATE * dt,
+    );
   }
 
   private handleMovement(dt: number): boolean {
@@ -677,8 +787,10 @@ export class Player {
       wz /= len;
     }
 
-    const running = this.input.isDown("shift");
-    const speed = running ? RUN_SPEED : WALK_SPEED;
+    const running = this.input.isDown("shift") && this.aimBlend < 0.45;
+    const speed =
+      (running ? RUN_SPEED : WALK_SPEED) *
+      lerp(1, AIM_MOVE_SPEED_MULTIPLIER, this.aimBlend);
 
     this.root.position.x += wx * speed * dt;
     this.root.position.z += wz * speed * dt;
@@ -712,18 +824,37 @@ export class Player {
     );
   }
 
-  private updateCamera(): void {
+  private updateCamera(dt: number): void {
+    const aimHeight = lerp(
+      CAMERA_AIM_HEIGHT,
+      AIM_CAMERA_AIM_HEIGHT,
+      this.aimBlend,
+    );
+    const cameraDistance = lerp(
+      CAMERA_DISTANCE,
+      AIM_CAMERA_DISTANCE,
+      this.aimBlend,
+    );
+    const shoulderOffsetX = lerp(
+      CAMERA_SHOULDER_OFFSET_X,
+      AIM_CAMERA_SHOULDER_OFFSET_X,
+      this.aimBlend,
+    );
+    const shoulderOffsetY = lerp(
+      CAMERA_SHOULDER_OFFSET_Y,
+      AIM_CAMERA_SHOULDER_OFFSET_Y,
+      this.aimBlend,
+    );
+
     this.aimOrigin.copyFrom(this.root.position);
-    this.aimOrigin.y += CAMERA_AIM_HEIGHT;
+    this.aimOrigin.y += aimHeight;
 
     this.desiredCameraPosition.copyFrom(this.aimOrigin);
     this.desiredCameraPosition.x +=
-      this.right.x * CAMERA_SHOULDER_OFFSET_X -
-      this.flatForward.x * CAMERA_DISTANCE;
-    this.desiredCameraPosition.y += CAMERA_SHOULDER_OFFSET_Y;
+      this.right.x * shoulderOffsetX - this.flatForward.x * cameraDistance;
+    this.desiredCameraPosition.y += shoulderOffsetY;
     this.desiredCameraPosition.z +=
-      this.right.z * CAMERA_SHOULDER_OFFSET_X -
-      this.flatForward.z * CAMERA_DISTANCE;
+      this.right.z * shoulderOffsetX - this.flatForward.z * cameraDistance;
 
     this.resolveCameraCollision(
       this.aimOrigin,
@@ -736,7 +867,46 @@ export class Player {
     this.cameraTarget.x += this.lookForward.x * CAMERA_LOOK_AHEAD;
     this.cameraTarget.y += this.lookForward.y * CAMERA_LOOK_AHEAD;
     this.cameraTarget.z += this.lookForward.z * CAMERA_LOOK_AHEAD;
+
+    const targetFov = lerp(CAMERA_FOV, AIM_CAMERA_FOV, this.aimBlend);
+    const fovT = 1 - Math.exp(-CAMERA_FOV_LERP_RATE * dt);
+    this.camera.fov += (targetFov - this.camera.fov) * fovT;
+
+    this.applyCameraShake(dt);
     this.camera.setTarget(this.cameraTarget);
+  }
+
+  private applyCameraShake(dt: number): void {
+    if (this.cameraShakeRemaining <= 0) return;
+
+    const duration = Math.max(0.01, this.cameraShakeDuration);
+    const elapsed = duration - this.cameraShakeRemaining;
+    const life = clamp01(this.cameraShakeRemaining / duration);
+    const amplitude = this.cameraShakeStrength * life * life;
+    const seed = this.cameraShakeSeed;
+    const shakeX =
+      (Math.sin(elapsed * 72 + seed) +
+        Math.sin(elapsed * 147 + seed * 0.37) * 0.35) *
+      amplitude;
+    const shakeY =
+      (Math.cos(elapsed * 96 + seed * 1.7) +
+        Math.sin(elapsed * 181 + seed) * 0.3) *
+      amplitude;
+
+    this.camera.position.x += this.right.x * shakeX;
+    this.camera.position.y += shakeY * 0.6;
+    this.camera.position.z += this.right.z * shakeX;
+
+    // Target moves a little farther than the camera to create a rotational
+    // kick instead of only sliding the view in screen-space.
+    this.cameraTarget.x += this.right.x * shakeX * 1.6;
+    this.cameraTarget.y += shakeY * 1.15;
+    this.cameraTarget.z += this.right.z * shakeX * 1.6;
+
+    this.cameraShakeRemaining = Math.max(0, this.cameraShakeRemaining - dt);
+    if (this.cameraShakeRemaining === 0) {
+      this.cameraShakeStrength = 0;
+    }
   }
 
   private resolveCameraCollision(
@@ -823,9 +993,16 @@ export class Player {
       const left = this.input.isDown("a") ? 1 : 0;
       const right = this.input.isDown("d") ? 1 : 0;
       const intentMag = Math.hypot(fwd - back, right - left);
-      const running = this.input.isDown("shift");
+      const running = this.input.isDown("shift") && this.aimBlend < 0.45;
+      const speedMultiplier = lerp(
+        1,
+        AIM_MOVE_SPEED_MULTIPLIER,
+        this.aimBlend,
+      );
       const effectiveSpeed =
-        intentMag === 0 ? 0 : running ? RUN_SPEED : WALK_SPEED;
+        intentMag === 0
+          ? 0
+          : (running ? RUN_SPEED : WALK_SPEED) * speedMultiplier;
 
       if (effectiveSpeed < WALK_THRESHOLD) {
         this.currentState = "idle";
@@ -912,4 +1089,24 @@ export class Player {
       }
     }
   }
+}
+
+function clamp(v: number, min: number, max: number): number {
+  if (v < min) return min;
+  if (v > max) return max;
+  return v;
+}
+
+function clamp01(v: number): number {
+  return clamp(v, 0, 1);
+}
+
+function lerp(a: number, b: number, t: number): number {
+  return a + (b - a) * clamp01(t);
+}
+
+function moveToward(current: number, target: number, maxDelta: number): number {
+  if (current < target) return Math.min(target, current + maxDelta);
+  if (current > target) return Math.max(target, current - maxDelta);
+  return target;
 }

@@ -12,6 +12,7 @@ type LockHandler = (locked: boolean) => void;
  */
 export class Input {
   private heldKeys = new Set<string>();
+  private heldMouseButtons = new Set<number>();
   private mouseDeltaX = 0;
   private mouseDeltaY = 0;
   private clickHandlers = new Map<number, Set<ClickHandler>>();
@@ -33,11 +34,16 @@ export class Input {
   };
 
   private readonly onMouseDown = (e: MouseEvent): void => {
+    this.heldMouseButtons.add(e.button);
     const set = this.clickHandlers.get(e.button);
     if (!set) return;
     for (const handler of set) {
       handler();
     }
+  };
+
+  private readonly onMouseUp = (e: MouseEvent): void => {
+    this.heldMouseButtons.delete(e.button);
   };
 
   private readonly onLockChange = (): void => {
@@ -51,6 +57,7 @@ export class Input {
   // alt-tab don't get stuck "down" forever.
   private readonly onBlur = (): void => {
     this.heldKeys.clear();
+    this.heldMouseButtons.clear();
   };
 
   constructor() {
@@ -58,12 +65,17 @@ export class Input {
     window.addEventListener("keyup", this.onKeyUp);
     window.addEventListener("mousemove", this.onMouseMove);
     window.addEventListener("mousedown", this.onMouseDown);
+    window.addEventListener("mouseup", this.onMouseUp);
     window.addEventListener("blur", this.onBlur);
     document.addEventListener("pointerlockchange", this.onLockChange);
   }
 
   isDown(key: string): boolean {
     return this.heldKeys.has(key.toLowerCase());
+  }
+
+  isMouseDown(button: number): boolean {
+    return this.heldMouseButtons.has(button);
   }
 
   getMouseDelta(): { dx: number; dy: number } {
@@ -102,9 +114,11 @@ export class Input {
     window.removeEventListener("keyup", this.onKeyUp);
     window.removeEventListener("mousemove", this.onMouseMove);
     window.removeEventListener("mousedown", this.onMouseDown);
+    window.removeEventListener("mouseup", this.onMouseUp);
     window.removeEventListener("blur", this.onBlur);
     document.removeEventListener("pointerlockchange", this.onLockChange);
     this.heldKeys.clear();
+    this.heldMouseButtons.clear();
     this.clickHandlers.clear();
     this.lockHandlers.clear();
     this.mouseDeltaX = 0;

@@ -28,6 +28,7 @@ import type { Nullable } from "@babylonjs/core/types.js";
 import { AdvancedDynamicTexture } from "@babylonjs/gui/2D/advancedDynamicTexture.js";
 import { Rectangle } from "@babylonjs/gui/2D/controls/rectangle.js";
 import { TextBlock } from "@babylonjs/gui/2D/controls/textBlock.js";
+import { StackPanel } from "@babylonjs/gui/2D/controls/stackPanel.js";
 import { Image } from "@babylonjs/gui/2D/controls/image.js";
 import { Control } from "@babylonjs/gui/2D/controls/control.js";
 
@@ -35,12 +36,16 @@ import type { Player } from "../entities/Player.js";
 import type { Weapon } from "../entities/Weapon.js";
 import type { WaveState } from "../systems/WaveSpawner.js";
 import { onHit, type HitEvent } from "../systems/Combat.js";
+import type { WeaponStats } from "../data/WeaponArchetype.js";
+import { Archetype } from "../data/WeaponArchetype.js";
+import { RARITY_COLOR, RarityTier } from "../data/Rarity.js";
 
 // Crosshair PNG: Kenney crosshair-pack #007 (clean broken-plus, white).
 // Picked by inspecting the preview sheet; reads cleanly against both the
 // dusty courtyard ground and the desaturated sky.
 const CROSSHAIR_PATH = "/assets/ui/crosshair-pack/PNG/White/crosshair007.png";
-const CROSSHAIR_SIZE_PX = 32;
+const CROSSHAIR_HIP_SIZE_PX = 38;
+const CROSSHAIR_AIM_SIZE_PX = 26;
 
 // Bar geometry. Hardcoded pixel dimensions — Babylon GUI's percentage
 // width units fight with control alignment so fixed pixels are simpler
@@ -92,6 +97,47 @@ const CROSSHAIR_FLASH_MS = 120;
 const CROSSHAIR_FLASH_COLOR = "#ffffff";
 const CROSSHAIR_KILL_FLASH_COLOR = "#ff3a3a";
 
+// Pickup prompt — appears bottom-center when the player is within pickup
+// range of a LootDrop. Sits above the HP/Shield bars (which top out at
+// ~66 px from the bottom) and below the crosshair so it doesn't fight for
+// attention with combat focus.
+const PICKUP_PROMPT_BOTTOM_PX = 140;
+const PICKUP_PROMPT_WIDTH_PX = 420;
+const PICKUP_PROMPT_PAD_PX = 12;
+const PICKUP_PROMPT_BG = "#0e1119e6";
+const PICKUP_PROMPT_BORDER = "#ffffff55";
+
+// Display strings keyed by enum index (RarityTier + Archetype enums are
+// numeric and the order matches these arrays). All-caps is the Borderlands
+// convention and reads as "label" rather than "title".
+const RARITY_NAME: Record<RarityTier, string> = {
+  [RarityTier.COMMON]: "COMMON",
+  [RarityTier.UNCOMMON]: "UNCOMMON",
+  [RarityTier.RARE]: "RARE",
+  [RarityTier.EPIC]: "EPIC",
+  [RarityTier.LEGENDARY]: "LEGENDARY",
+};
+
+const ARCHETYPE_NAME: Record<Archetype, string> = {
+  [Archetype.PISTOL]: "PISTOL",
+  [Archetype.SMG]: "SMG",
+  [Archetype.RIFLE]: "RIFLE",
+  [Archetype.SHOTGUN]: "SHOTGUN",
+  [Archetype.BLASTER]: "BLASTER",
+};
+
+/**
+ * Data the HUD needs to render the pickup prompt for a LootDrop. The Hud
+ * intentionally doesn't import LootDrop / WeaponDatabase so the dependency
+ * runs Arena → HUD (one direction), not the other way round.
+ */
+export interface PickupPromptInfo {
+  weapon: WeaponStats;
+  rarity: RarityTier;
+  archetype: Archetype;
+  displayName: string;
+}
+
 export class Hud {
   private readonly scene: Scene;
   private readonly player: Player;
@@ -109,9 +155,18 @@ export class Hud {
   private readonly currencyText: TextBlock;
   private readonly crosshair: Image;
   private readonly crosshairFlash: Rectangle;
+  private readonly pickupPanel: Rectangle;
+  private readonly pickupActionText: TextBlock;
+  private readonly pickupNameText: TextBlock;
+  private readonly pickupStatsText: TextBlock;
+  private readonly pickupHintText: TextBlock;
 
   private waveState: WaveState | null = null;
   private crosshairFlashRemainingMs = 0;
+  // Reference-equality cache so we don't rebuild text every frame while the
+  // player stands next to the same drop. `weapon` is the unique key — same
+  // LootDrop returns the same WeaponStats reference each call.
+  private currentPickupWeapon: WeaponStats | null = null;
 
   private updateObserver: Nullable<Observer<Scene>> = null;
   private hitObserver: Nullable<Observer<HitEvent>> = null;
@@ -216,8 +271,8 @@ export class Hud {
 
     // ---- Crosshair (centered) ----
     this.crosshair = new Image("hudCrosshair", CROSSHAIR_PATH);
-    this.crosshair.width = `${CROSSHAIR_SIZE_PX}px`;
-    this.crosshair.height = `${CROSSHAIR_SIZE_PX}px`;
+    this.crosshair.width = `${CROSSHAIR_HIP_SIZE_PX}px`;
+    this.crosshair.height = `${CROSSHAIR_HIP_SIZE_PX}px`;
     this.crosshair.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
     this.crosshair.verticalAlignment = Control.VERTICAL_ALIGNMENT_CENTER;
     this.crosshair.stretch = Image.STRETCH_UNIFORM;
@@ -228,8 +283,8 @@ export class Hud {
     // setting crosshairFlashRemainingMs > 0; refresh() decays it back to 0
     // each frame using the engine's getDeltaTime().
     this.crosshairFlash = new Rectangle("hudCrosshairFlash");
-    this.crosshairFlash.width = `${CROSSHAIR_SIZE_PX}px`;
-    this.crosshairFlash.height = `${CROSSHAIR_SIZE_PX}px`;
+    this.crosshairFlash.width = `${CROSSHAIR_HIP_SIZE_PX}px`;
+    this.crosshairFlash.height = `${CROSSHAIR_HIP_SIZE_PX}px`;
     this.crosshairFlash.thickness = 0;
     this.crosshairFlash.background = CROSSHAIR_FLASH_COLOR;
     this.crosshairFlash.horizontalAlignment =
@@ -237,6 +292,74 @@ export class Hud {
     this.crosshairFlash.verticalAlignment = Control.VERTICAL_ALIGNMENT_CENTER;
     this.crosshairFlash.alpha = 0;
     this.texture.addControl(this.crosshairFlash);
+
+    // ---- Pickup prompt (bottom-center, hidden by default) ----
+    // Wrapper rectangle owns the background + border. Child StackPanel
+    // stacks four lines of text vertically. Hidden via isVisible so the
+    // texture re-render only fires when the prompt actually shows/hides.
+    this.pickupPanel = new Rectangle("hudPickupPanel");
+    this.pickupPanel.width = `${PICKUP_PROMPT_WIDTH_PX}px`;
+    this.pickupPanel.adaptHeightToChildren = true;
+    this.pickupPanel.thickness = 2;
+    this.pickupPanel.color = PICKUP_PROMPT_BORDER;
+    this.pickupPanel.background = PICKUP_PROMPT_BG;
+    this.pickupPanel.cornerRadius = 6;
+    this.pickupPanel.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
+    this.pickupPanel.verticalAlignment = Control.VERTICAL_ALIGNMENT_BOTTOM;
+    // Bottom-anchored, so a *negative* `top` lifts the panel UP from the
+    // bottom edge. Mirrors the HP/Shield bar offset convention.
+    this.pickupPanel.top = `${-PICKUP_PROMPT_BOTTOM_PX}px`;
+    this.pickupPanel.isVisible = false;
+
+    const pickupStack = new StackPanel("hudPickupStack");
+    pickupStack.isVertical = true;
+    pickupStack.paddingTop = `${PICKUP_PROMPT_PAD_PX}px`;
+    pickupStack.paddingBottom = `${PICKUP_PROMPT_PAD_PX}px`;
+    pickupStack.paddingLeft = `${PICKUP_PROMPT_PAD_PX}px`;
+    pickupStack.paddingRight = `${PICKUP_PROMPT_PAD_PX}px`;
+    this.pickupPanel.addControl(pickupStack);
+
+    this.pickupActionText = makePickupLine(
+      "hudPickupAction",
+      "Press [E] to pick up",
+      22,
+      "#ffe066",
+      "bold",
+      26,
+    );
+    pickupStack.addControl(this.pickupActionText);
+
+    this.pickupNameText = makePickupLine(
+      "hudPickupName",
+      "",
+      18,
+      "#FFFFFF",
+      "bold",
+      24,
+    );
+    pickupStack.addControl(this.pickupNameText);
+
+    this.pickupStatsText = makePickupLine(
+      "hudPickupStats",
+      "",
+      14,
+      "#cccccc",
+      "normal",
+      20,
+    );
+    pickupStack.addControl(this.pickupStatsText);
+
+    this.pickupHintText = makePickupLine(
+      "hudPickupHint",
+      "Stored in inventory  —  press TAB to equip",
+      13,
+      "#9aa0aa",
+      "normal",
+      18,
+    );
+    pickupStack.addControl(this.pickupHintText);
+
+    this.texture.addControl(this.pickupPanel);
 
     // Initial sync so the HUD reads correctly on the very first rendered
     // frame, before onBeforeRender has fired even once.
@@ -252,6 +375,35 @@ export class Hud {
         ? CROSSHAIR_KILL_FLASH_COLOR
         : CROSSHAIR_FLASH_COLOR;
     });
+  }
+
+  /**
+   * Show or hide the "press [E] to pick up" prompt. Pass `null` when the
+   * player has no drop in pickup range; pass a populated PickupPromptInfo
+   * when they do. Cheap to call every frame — text is only rebuilt when
+   * the underlying weapon reference actually changes.
+   */
+  setPickupPrompt(info: PickupPromptInfo | null): void {
+    if (this.disposed) return;
+    if (info === null) {
+      if (this.pickupPanel.isVisible) {
+        this.pickupPanel.isVisible = false;
+      }
+      this.currentPickupWeapon = null;
+      return;
+    }
+    if (this.currentPickupWeapon !== info.weapon) {
+      const rarityName = RARITY_NAME[info.rarity];
+      const archetypeName = ARCHETYPE_NAME[info.archetype];
+      this.pickupNameText.text =
+        `${rarityName} ${archetypeName}  —  ${info.displayName}`;
+      this.pickupNameText.color = RARITY_COLOR[info.rarity];
+      this.pickupStatsText.text = formatPickupStats(info.weapon);
+      this.currentPickupWeapon = info.weapon;
+    }
+    if (!this.pickupPanel.isVisible) {
+      this.pickupPanel.isVisible = true;
+    }
   }
 
   /**
@@ -337,6 +489,17 @@ export class Hud {
     // re-uploads texture pixels when text actually changes.
     this.currencyText.text = `$ ${this.player.currency}`;
 
+    const aimAmount = this.player.getAimAmount();
+    const crosshairSize = Math.round(
+      lerp(CROSSHAIR_HIP_SIZE_PX, CROSSHAIR_AIM_SIZE_PX, aimAmount),
+    );
+    const crosshairSizePx = `${crosshairSize}px`;
+    this.crosshair.width = crosshairSizePx;
+    this.crosshair.height = crosshairSizePx;
+    this.crosshair.alpha = lerp(0.7, 1, aimAmount);
+    this.crosshairFlash.width = crosshairSizePx;
+    this.crosshairFlash.height = crosshairSizePx;
+
     // Crosshair flash decay. Engine delta is in milliseconds, matching
     // CROSSHAIR_FLASH_MS so we can subtract directly without unit conversion.
     if (this.crosshairFlashRemainingMs > 0) {
@@ -374,6 +537,10 @@ function clamp01(v: number): number {
   if (v < 0) return 0;
   if (v > 1) return 1;
   return v;
+}
+
+function lerp(a: number, b: number, t: number): number {
+  return a + (b - a) * clamp01(t);
 }
 
 /**
@@ -420,6 +587,46 @@ function makeBarFill(name: string, color: string): Rectangle {
   fill.horizontalAlignment = Control.HORIZONTAL_ALIGNMENT_LEFT;
   fill.verticalAlignment = Control.VERTICAL_ALIGNMENT_CENTER;
   return fill;
+}
+
+/**
+ * One line of the pickup prompt. StackPanel children need an explicit
+ * height (it ignores intrinsic text height), and we want a 1px black drop
+ * shadow on every line so the prompt stays legible against the daytime
+ * dirt floor + the rarity-colored beam.
+ */
+function makePickupLine(
+  name: string,
+  initialText: string,
+  fontSize: number,
+  color: string,
+  weight: "normal" | "bold",
+  heightPx: number,
+): TextBlock {
+  const t = new TextBlock(name);
+  t.text = initialText;
+  t.color = color;
+  t.fontSize = fontSize;
+  t.fontFamily = "monospace";
+  if (weight === "bold") t.fontStyle = "bold";
+  t.height = `${heightPx}px`;
+  t.textHorizontalAlignment = Control.HORIZONTAL_ALIGNMENT_CENTER;
+  t.textVerticalAlignment = Control.VERTICAL_ALIGNMENT_CENTER;
+  t.shadowColor = "#000000";
+  t.shadowOffsetX = 1;
+  t.shadowOffsetY = 1;
+  t.shadowBlur = 0;
+  return t;
+}
+
+/**
+ * Compact one-line stats summary for the pickup prompt. Shown in monospace
+ * so the columns line up frame-to-frame as the player sweeps past drops.
+ */
+function formatPickupStats(s: WeaponStats): string {
+  const dmg = Math.round(s.damage);
+  const rof = s.fireRate.toFixed(1);
+  return `DMG ${dmg}   |   ROF ${rof}/s   |   MAG ${s.magazine}`;
 }
 
 /**
